@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
-    "train:alphazero": "bash scripts/run-gpu-alpha-train.sh"
+    "train:alphazero": "bash scripts/run-gpu-alpha-train.sh",
+    "eval:alphazero": "bash scripts/run-torch-python.sh scripts/evaluate_alphazero.py"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.4",
