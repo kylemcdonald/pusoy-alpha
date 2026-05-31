@@ -15,6 +15,7 @@ import {
   GameState,
   Move,
   PASS_MOVE,
+  SUIT_STRENGTH_ORDER,
   Suit,
   applyMove,
   cardId,
@@ -37,8 +38,9 @@ import { createRng } from "./core/random";
 
 const HUMAN_PLAYER = 0;
 const PLAYER_LABELS = ["You", "AI"];
-const DEFAULT_SUIT_ORDER: Suit[] = ["S", "H", "C", "D"];
-const LEGACY_DEFAULT_SUIT_ORDER: Suit[] = ["C", "S", "H", "D"];
+const DEFAULT_SUIT_ORDER: Suit[] = [...SUIT_STRENGTH_ORDER];
+const LEGACY_PUSOY_SUIT_ORDER: Suit[] = ["C", "S", "H", "D"];
+const LEGACY_FRONTEND_SUIT_ORDER: Suit[] = ["S", "H", "C", "D"];
 const SUIT_SYMBOLS: Record<Suit, string> = {
   C: "♣️",
   S: "♠️",
@@ -86,7 +88,8 @@ function loadSettings(): AppSettings {
 
   try {
     const settings = normalizeSettings(JSON.parse(window.localStorage.getItem(SETTINGS_KEY) ?? "null"));
-    return sameSuitOrder(settings.suitOrder, LEGACY_DEFAULT_SUIT_ORDER)
+    return sameSuitOrder(settings.suitOrder, LEGACY_PUSOY_SUIT_ORDER) ||
+      sameSuitOrder(settings.suitOrder, LEGACY_FRONTEND_SUIT_ORDER)
       ? { ...settings, suitOrder: [...DEFAULT_SUIT_ORDER] }
       : settings;
   } catch {
@@ -575,14 +578,16 @@ function SettingsModal({
   onChange: (settings: AppSettings) => void;
   onClose: () => void;
 }) {
+  const displayedSuitOrder = [...settings.suitOrder].reverse();
+
   const moveSuit = (from: number, to: number) => {
-    if (to < 0 || to >= settings.suitOrder.length) {
+    if (to < 0 || to >= displayedSuitOrder.length) {
       return;
     }
-    const nextOrder = [...settings.suitOrder];
-    const [suit] = nextOrder.splice(from, 1);
-    nextOrder.splice(to, 0, suit);
-    onChange({ ...settings, suitOrder: nextOrder });
+    const nextDisplayedOrder = [...displayedSuitOrder];
+    const [suit] = nextDisplayedOrder.splice(from, 1);
+    nextDisplayedOrder.splice(to, 0, suit);
+    onChange({ ...settings, suitOrder: nextDisplayedOrder.reverse() });
   };
 
   return (
@@ -607,9 +612,9 @@ function SettingsModal({
         </div>
 
         <div className="settings-section">
-          <h3>Suit Order</h3>
+          <h3>Suit Order (High to Low)</h3>
           <div className="suit-order-list">
-            {settings.suitOrder.map((suit, index) => (
+            {displayedSuitOrder.map((suit, index) => (
               <div className="suit-order-row" key={suit}>
                 <span>{SUIT_SYMBOLS[suit]}</span>
                 <strong>{suit}</strong>
@@ -617,16 +622,16 @@ function SettingsModal({
                   className="icon-button"
                   disabled={index === 0}
                   onClick={() => moveSuit(index, index - 1)}
-                  title={`Move ${suit} up`}
+                  title={`Move ${suit} higher`}
                   type="button"
                 >
                   <ArrowUp size={17} />
                 </button>
                 <button
                   className="icon-button"
-                  disabled={index === settings.suitOrder.length - 1}
+                  disabled={index === displayedSuitOrder.length - 1}
                   onClick={() => moveSuit(index, index + 1)}
-                  title={`Move ${suit} down`}
+                  title={`Move ${suit} lower`}
                   type="button"
                 >
                   <ArrowDown size={17} />

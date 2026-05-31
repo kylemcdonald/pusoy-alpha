@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cardFromId, cardId } from "./cards";
 import { beats, classifyCombo, enumerateCombos, moveKey, playMove } from "./combinations";
-import { applyMove, createGame, isTerminal, legalMoves } from "./game";
+import { GameState, applyMove, createGame, findMoveByCards, isTerminal, legalMoves } from "./game";
 
 function cards(ids: string[]) {
   return ids.map(cardFromId);
@@ -9,12 +9,15 @@ function cards(ids: string[]) {
 
 describe("Pusoy Dos combination rules", () => {
   it("orders singles by rank then suit", () => {
+    const threeHearts = classifyCombo(cards(["3H"]))!;
     const threeDiamonds = classifyCombo(cards(["3D"]))!;
-    const threeClubs = classifyCombo(cards(["3C"]))!;
+    const twoDiamonds = classifyCombo(cards(["2D"]))!;
     const twoClubs = classifyCombo(cards(["2C"]))!;
+    const twoHearts = classifyCombo(cards(["2H"]))!;
 
-    expect(beats(threeDiamonds, threeClubs)).toBe(true);
+    expect(beats(threeHearts, threeDiamonds)).toBe(true);
     expect(beats(twoClubs, threeDiamonds)).toBe(true);
+    expect(beats(twoHearts, twoDiamonds)).toBe(true);
   });
 
   it("classifies and ranks five-card hands", () => {
@@ -44,13 +47,40 @@ describe("Pusoy Dos combination rules", () => {
 });
 
 describe("Pusoy Dos game flow", () => {
-  it("requires the first move to include 3C", () => {
+  it("requires the first move to include 3D", () => {
     const game = createGame("first-move-test");
     const firstPlayer = game.currentPlayer;
-    expect(game.hands[firstPlayer].map(cardId)).toContain("3C");
-    expect(legalMoves(game).every((move) => move.type === "play" && move.cards.some((card) => cardId(card) === "3C"))).toBe(
+    expect(game.hands[firstPlayer].map(cardId)).toContain("3D");
+    expect(legalMoves(game).every((move) => move.type === "play" && move.cards.some((card) => cardId(card) === "3D"))).toBe(
       true
     );
+  });
+
+  it("allows 2H to answer 2D", () => {
+    const activeCombo = classifyCombo(cards(["2D"]))!;
+    const move = playMove(cards(["2D"]));
+    const game: GameState = {
+      id: "two-suit-order-test",
+      hands: [cards(["2H"]), cards(["3C"])],
+      currentPlayer: 0,
+      activeCombo,
+      lastPlayer: 1,
+      passesSincePlay: 0,
+      finished: [],
+      history: [
+        {
+          turn: 1,
+          player: 1,
+          move,
+          combo: activeCombo,
+          activeCombo,
+          remaining: [1, 1],
+          finished: []
+        }
+      ]
+    };
+
+    expect(findMoveByCards(game, cards(["2H"]))).not.toBeNull();
   });
 
   it("applies legal moves until a game reaches terminal state", () => {
