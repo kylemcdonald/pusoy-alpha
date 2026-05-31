@@ -1,0 +1,8 @@
+commit	first_place_rate	average_reward	games	status	description
+26be111	0.5450	0.0900	200	keep	shipped 60-minute checkpoint after actor-prior MCTS fix
+b06196d	0.5500	0.1000	200	reject	handcrafted prior blend 0.50, value blend 0.00
+b06196d	0.5400	0.0800	200	reject	handcrafted prior blend 0.50, value blend 0.25
+b06196d	0.5600	0.1200	200	keep	handcrafted prior blend 0.75, value blend 0.00
+b06196d	0.5400	0.0800	200	reject	handcrafted prior blend 0.30, value blend 0.25
+cde2f00	0.5400	0.0800	200	reject	30-minute self-play continuation, pure neural
+cde2f00	0.5700	0.1400	200	keep	30-minute self-play continuation with handcrafted prior blend 0.75
