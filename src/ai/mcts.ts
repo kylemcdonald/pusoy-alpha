@@ -49,17 +49,19 @@ function makeNode(state: GameState, move: Move | null, prior = 1): SearchNode {
   };
 }
 
-function selectChild(node: SearchNode, exploration: number): SearchNode {
+function selectChild(node: SearchNode, rootPlayer: number, exploration: number): SearchNode {
   if (!node.children || node.children.length === 0) {
     throw new Error("Cannot select from an unexpanded node");
   }
 
   const parentVisits = Math.max(1, node.visits);
+  const actor = node.state.currentPlayer;
   let best = node.children[0];
   let bestScore = Number.NEGATIVE_INFINITY;
 
   for (const child of node.children) {
-    const q = nodeValue(child);
+    const valueForRoot = nodeValue(child);
+    const q = actor === rootPlayer ? valueForRoot : -valueForRoot;
     const u = exploration * child.prior * Math.sqrt(parentVisits) / (1 + child.visits);
     const score = q + u;
     if (score > bestScore) {
@@ -95,15 +97,18 @@ function visit(
   }
 
   if (!node.children) {
-    const evaluation = model.evaluate(node.state, rootPlayer, moves);
+    const actor = node.state.currentPlayer;
+    const policyEvaluation = model.evaluate(node.state, actor, moves);
+    const value =
+      actor === rootPlayer ? policyEvaluation.value : model.evaluate(node.state, rootPlayer, moves).value;
     node.children = moves.map((move) => {
-      return makeNode(applyLegalMove(node.state, move), move, evaluation.priors.get(moveKey(move)) ?? 0.001);
+      return makeNode(applyLegalMove(node.state, move), move, policyEvaluation.priors.get(moveKey(move)) ?? 0.001);
     });
-    node.valueSum += evaluation.value;
-    return evaluation.value;
+    node.valueSum += value;
+    return value;
   }
 
-  const child = selectChild(node, exploration);
+  const child = selectChild(node, rootPlayer, exploration);
   const value = visit(child, model, rootPlayer, depth + 1, maxDepth, exploration);
   node.valueSum += value;
   return value;
