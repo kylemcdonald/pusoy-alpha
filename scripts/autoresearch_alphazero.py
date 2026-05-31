@@ -244,6 +244,11 @@ def main() -> None:
     parser.add_argument("--save-interval", type=int, default=10)
     parser.add_argument("--confirm-margin", type=float, default=0.01)
     parser.add_argument("--reserve-minutes", type=float, default=20)
+    parser.add_argument(
+        "--advance-on-unconfirmed",
+        action="store_true",
+        help="Continue training from the latest checkpoint even if it fails confirmation.",
+    )
     args = parser.parse_args()
 
     args.run_dir.mkdir(parents=True, exist_ok=True)
@@ -258,6 +263,7 @@ def main() -> None:
 
     deadline = time.time() + args.total_hours * 3600
     current_model = args.initial_model
+    best_model = args.initial_model
     best_screen: EvalResult | None = None
     best_confirm: EvalResult | None = None
     best_rate = args.baseline_rate
@@ -325,14 +331,23 @@ def main() -> None:
             if confirm.first_place_rate > best_rate:
                 best_rate = confirm.first_place_rate
                 best_confirm = confirm
+                best_model = checkpoint
                 current_model = checkpoint
                 promote_model(checkpoint, args.promote_to, winner, confirm)
                 shutil.copyfile(checkpoint, args.run_dir / "best-confirmed.json")
                 print(f"new confirmed best: {best_rate:.4f} from {checkpoint}", flush=True)
             else:
-                current_model = checkpoint
+                current_model = checkpoint if args.advance_on_unconfirmed else best_model
+                print(
+                    f"confirmation failed; next init={current_model}",
+                    flush=True,
+                )
         else:
-            current_model = checkpoint
+            current_model = checkpoint if args.advance_on_unconfirmed else best_model
+            print(
+                f"screen winner below confirmation threshold; next init={current_model}",
+                flush=True,
+            )
 
     if best_confirm is not None:
         promote_model(best_confirm.checkpoint, args.promote_to, best_confirm, best_confirm)
