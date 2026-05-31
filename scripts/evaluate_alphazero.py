@@ -169,6 +169,7 @@ class NeuralPolicyValue:
         neural_policy_temperature: float | None = None,
         opponent_aware_prior_weight: float | None = None,
         endgame_solver_cards: int | None = None,
+        rollout_value_weight: float | None = None,
     ) -> None:
         self.model_path = model_path
         self.net = PusoyNet().to(device)
@@ -197,7 +198,12 @@ class NeuralPolicyValue:
             0,
             int(endgame_solver_cards if endgame_solver_cards is not None else inference.get("endgameSolverCards", 0)),
         )
+        self.rollout_value_weight = max(
+            0.0,
+            min(1.0, rollout_value_weight if rollout_value_weight is not None else inference.get("rolloutValueWeight", 0.0)),
+        )
         self.endgame_cache: dict[tuple[int, tuple], float] = {}
+        self.rollout_cache: dict[tuple[int, tuple], float] = {}
         self.handcrafted = HandcraftedPolicyValue()
 
     @torch.no_grad()
@@ -227,6 +233,10 @@ class NeuralPolicyValue:
         if self.endgame_solver_cards > 0 and remaining_cards(game) <= self.endgame_solver_cards:
             value = self.solve_endgame(game, perspective_player)
             priors = exact_policy_priors(game, perspective_player, moves, self.solve_endgame)
+
+        if self.rollout_value_weight > 0:
+            rollout_value = self.greedy_rollout_value(game, perspective_player)
+            value = (1 - self.rollout_value_weight) * value + self.rollout_value_weight * rollout_value
 
         if self.handcrafted_prior_weight > 0 or self.handcrafted_value_weight > 0:
             handcrafted_priors, handcrafted_value_result = self.handcrafted.evaluate(game, perspective_player, moves, device)
@@ -264,6 +274,23 @@ class NeuralPolicyValue:
                     child_values.append(self.solve_endgame(child, perspective_player))
                 value = max(child_values) if game.current_player == perspective_player else min(child_values)
         self.endgame_cache[key] = value
+        return value
+
+    def greedy_rollout_value(self, game: Game, perspective_player: int) -> float:
+        key = (perspective_player, game_key(game))
+        if key in self.rollout_cache:
+            return self.rollout_cache[key]
+        rollout = clone_game(game)
+        guard = 0
+        while not is_terminal(rollout) and guard < 280:
+            moves = legal_moves(rollout)
+            if not moves:
+                break
+            move = max(moves, key=lambda candidate: handcrafted_move_score(rollout, candidate))
+            apply_move(rollout, move)
+            guard += 1
+        value = reward_for(rollout, perspective_player) if is_terminal(rollout) else handcrafted_value(rollout, perspective_player)
+        self.rollout_cache[key] = value
         return value
 
 
@@ -581,6 +608,7 @@ def main() -> None:
     parser.add_argument("--neural-policy-temperature", type=float, default=None)
     parser.add_argument("--opponent-aware-prior-weight", type=float, default=None)
     parser.add_argument("--endgame-solver-cards", type=int, default=None)
+    parser.add_argument("--rollout-value-weight", type=float, default=None)
     args = parser.parse_args()
 
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -598,6 +626,7 @@ def main() -> None:
         args.neural_policy_temperature,
         args.opponent_aware_prior_weight,
         args.endgame_solver_cards,
+        args.rollout_value_weight,
     )
     opponent = HandcraftedPolicyValue()
     first_places = 0
@@ -635,6 +664,7 @@ def main() -> None:
     print(f"neural_policy_temperature: {candidate.neural_policy_temperature:.4f}")
     print(f"opponent_aware_prior_weight: {candidate.opponent_aware_prior_weight:.4f}")
     print(f"endgame_solver_cards: {candidate.endgame_solver_cards}")
+    print(f"rollout_value_weight: {candidate.rollout_value_weight:.4f}")
 
 
 if __name__ == "__main__":

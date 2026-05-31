@@ -36,6 +36,7 @@ export interface NeuralModelFile {
     neuralPolicyTemperature?: number;
     opponentAwarePriorWeight?: number;
     endgameSolverCards?: number;
+    rolloutValueWeight?: number;
   };
   weights: {
     state_fc: LayerWeights;
@@ -172,7 +173,9 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
   private readonly neuralPolicyTemperature: number;
   private readonly opponentAwarePriorWeight: number;
   private readonly endgameSolverCards: number;
+  private readonly rolloutValueWeight: number;
   private readonly endgameCache = new Map<string, number>();
+  private readonly rolloutCache = new Map<string, number>();
 
   constructor(private readonly file: NeuralModelFile) {
     this.name = file.name;
@@ -184,6 +187,7 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
     this.neuralPolicyTemperature = Math.max(0.05, file.inference?.neuralPolicyTemperature ?? 1);
     this.opponentAwarePriorWeight = clamp01(file.inference?.opponentAwarePriorWeight ?? 0);
     this.endgameSolverCards = Math.max(0, Math.floor(file.inference?.endgameSolverCards ?? 0));
+    this.rolloutValueWeight = clamp01(file.inference?.rolloutValueWeight ?? 0);
   }
 
   evaluate(state: GameState, perspectivePlayer: number, moves = legalMoves(state)): ModelEvaluation {
@@ -210,6 +214,10 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
       baseProbabilities = exactPolicyPriors(state, perspectivePlayer, moves, (next) =>
         this.solveEndgame(next, perspectivePlayer)
       );
+    }
+    if (this.rolloutValueWeight > 0) {
+      const rolloutValue = this.greedyRolloutValue(state, perspectivePlayer);
+      value = (1 - this.rolloutValueWeight) * value + this.rolloutValueWeight * rolloutValue;
     }
     const handcraftedEvaluation =
       this.handcraftedPriorWeight > 0 || this.handcraftedValueWeight > 0
@@ -264,6 +272,35 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
     }
 
     this.endgameCache.set(key, value);
+    return value;
+  }
+
+  private greedyRolloutValue(state: GameState, perspectivePlayer: number): number {
+    const key = `${perspectivePlayer}:${endgameKey(state)}`;
+    const cached = this.rolloutCache.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    let rollout = state;
+    let guard = 0;
+    while (!isTerminal(rollout) && guard < 280) {
+      const moves = legalMoves(rollout);
+      if (moves.length === 0) {
+        break;
+      }
+      const evaluation = this.handcrafted.evaluate(rollout, rollout.currentPlayer, moves);
+      const move = moves.reduce((best, candidate) => {
+        return (evaluation.priors.get(moveKey(candidate)) ?? 0) > (evaluation.priors.get(moveKey(best)) ?? 0)
+          ? candidate
+          : best;
+      }, moves[0]);
+      rollout = applyLegalMove(rollout, move);
+      guard += 1;
+    }
+
+    const value = isTerminal(rollout) ? rewardForPlayer(rollout, perspectivePlayer) : this.handcrafted.evaluate(rollout, perspectivePlayer).value;
+    this.rolloutCache.set(key, value);
     return value;
   }
 }
