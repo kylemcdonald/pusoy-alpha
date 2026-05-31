@@ -16,6 +16,7 @@ from pusoy_gpu import (
     Game,
     PusoyNet,
     apply_move,
+    card_power,
     card_rank,
     classify,
     create_game,
@@ -136,7 +137,7 @@ def handcrafted_value(game: Game, perspective_player: int) -> float:
     opponent_count = len(game.hands[1 - perspective_player])
     count_value = (opponent_count - my_count) / 13
     if my_count > 0:
-        hand_strength = sum(card for card in game.hands[perspective_player]) / (my_count * 51)
+        hand_strength = sum(card_power(card) for card in game.hands[perspective_player]) / (my_count * 51)
     else:
         hand_strength = 0.0
     control_value = 0.12 if game.current_player == perspective_player and game.active_combo is None else 0.0
