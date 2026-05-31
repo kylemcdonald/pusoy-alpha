@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.wrangler/
+
+*.log
+logs/
+*.tmp
+.DS_Store
+.env*
+
+tsconfig.tsbuildinfo
+scripts/__pycache__/
+*.pyc
+
+model-archive/
