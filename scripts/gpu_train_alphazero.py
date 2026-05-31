@@ -20,6 +20,7 @@ from pusoy_gpu import (
     Game,
     PusoyNet,
     apply_move,
+    card_power,
     card_rank,
     create_game,
     is_terminal,
@@ -232,6 +233,80 @@ def select_handcrafted_move(game: Game, rng: random.Random, temperature: float) 
     return moves[sample_index([score**exponent for score in scores], rng)]
 
 
+def handcrafted_value(game: Game, player: int) -> float:
+    if is_terminal(game):
+        return reward_for(game, player)
+
+    my_count = len(game.hands[player])
+    opponent_count = len(game.hands[1 - player])
+    count_value = (opponent_count - my_count) / 13
+    hand_strength = sum(card_power(card) for card in game.hands[player]) / max(1, my_count * 51)
+    control_value = 0.12 if game.current_player == player and game.active_combo is None else 0.0
+    return max(-1.0, min(1.0, count_value * 1.25 + hand_strength * 0.22 + control_value))
+
+
+def evaluate_handcrafted_node(game: Game) -> tuple[list[Combo | None], list[float], float]:
+    player = game.current_player
+    moves = legal_moves(game)
+    if not moves or player < 0:
+        return [], [], 0.0
+
+    scores = [handcrafted_move_score(game, move) for move in moves]
+    total = sum(scores)
+    priors = [score / total for score in scores] if total > 0 else [1 / len(moves)] * len(moves)
+    return moves, priors, handcrafted_value(game, player)
+
+
+def expand_handcrafted(node: MctsNode) -> float:
+    moves, priors, value = evaluate_handcrafted_node(node.game)
+    node.children = [MctsEdge(move=move, prior=max(1e-5, prior)) for move, prior in zip(moves, priors, strict=True)]
+    return value
+
+
+def simulate_handcrafted(node: MctsNode, exploration: float) -> float:
+    if is_terminal(node.game):
+        return 0.0
+
+    player = node.game.current_player
+    node.visits += 1
+
+    if node.children is None:
+        return expand_handcrafted(node)
+
+    if not node.children:
+        return 0.0
+
+    edge = select_edge(node, exploration)
+    child = edge_child(edge, node)
+    if is_terminal(child.game):
+        value_for_player = reward_for(child.game, player)
+    else:
+        child_value = simulate_handcrafted(child, exploration)
+        child_player = child.game.current_player
+        value_for_player = child_value if child_player == player else -child_value
+
+    edge.visits += 1
+    edge.value_sum += value_for_player
+    return value_for_player
+
+
+def mcts_handcrafted_move(
+    game: Game,
+    rng: random.Random,
+    simulations: int,
+    exploration: float,
+    temperature: float,
+) -> Combo | None:
+    root = MctsNode(clone_game(game))
+    expand_handcrafted(root)
+    if not root.children:
+        return None
+    for _ in range(max(1, simulations)):
+        simulate_handcrafted(root, exploration)
+    action = select_from_visits(root.children, game.turns, temperature, 0 if temperature <= 0 else 9999, rng)
+    return root.children[action].move
+
+
 def select_from_visits(
     children: list[MctsEdge],
     turn: int,
@@ -391,7 +466,16 @@ def play_handcrafted_opponent_batch(
                 searches += 1
                 apply_move(game, moves[action])
             else:
-                move = select_handcrafted_move(game, rng, args.handcrafted_temperature)
+                if args.handcrafted_search_simulations > 0:
+                    move = mcts_handcrafted_move(
+                        game,
+                        rng,
+                        args.handcrafted_search_simulations,
+                        args.exploration,
+                        args.handcrafted_temperature,
+                    )
+                else:
+                    move = select_handcrafted_move(game, rng, args.handcrafted_temperature)
                 if move not in legal_moves(game):
                     break
                 apply_move(game, move)
@@ -544,6 +628,7 @@ def save_model(
             "trainSamples": args.train_samples,
             "opponentMode": args.opponent_mode,
             "handcraftedTemperature": args.handcrafted_temperature,
+            "handcraftedSearchSimulations": args.handcrafted_search_simulations,
             "history": history,
             "note": "AlphaZero-style self-play: MCTS visit counts train the policy head and terminal outcomes train the value head. Browser inference uses exported JSON weights.",
         },
@@ -586,6 +671,7 @@ def main() -> None:
     parser.add_argument("--root-noise-fraction", type=float, default=0.18)
     parser.add_argument("--opponent-mode", choices=["self", "handcrafted"], default="self")
     parser.add_argument("--handcrafted-temperature", type=float, default=0.0)
+    parser.add_argument("--handcrafted-search-simulations", type=int, default=0)
     parser.add_argument("--max-turns", type=int, default=160)
     parser.add_argument("--replay-size", type=int, default=50000)
     parser.add_argument("--train-samples", type=int, default=2048)
