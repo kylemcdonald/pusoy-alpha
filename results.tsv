@@ -11,3 +11,10 @@ bcc6bda	0.5700	0.1400	200	keep	post-suit-fix shipped checkpoint with handcrafted
 f6d6b6c	0.5450	0.0900	200	reject	30-minute post-suit greedy-handcrafted opponent training, pure neural
 f6d6b6c	0.6300	0.2600	200	keep	30-minute post-suit greedy-handcrafted opponent training with handcrafted prior blend 0.75
 f6d6b6c	0.5540	0.1080	1000	reject	large confirmation of post-suit greedy-handcrafted checkpoint with handcrafted prior blend 0.75
+f6d6b6c	0.6000	0.2000	200	keep	30-minute searched-handcrafted continuation with handcrafted prior blend 0.75
+f6d6b6c	0.5600	0.1200	1000	reject	large confirmation of searched-handcrafted continuation with handcrafted prior blend 0.75
+82fa9f4	0.5640	0.1280	1000	reject	searched-handcrafted checkpoint with prior blend 0.60 and neural temperature 0.50
+fad7eff	0.5320	0.0640	1000	reject	opponent-aware prior 0.25 with neural temperature 0.50
+3959064	0.6000	0.2000	100	reject	exact endgame solver screen, threshold 6 with prior blend 0.60 and neural temperature 0.50
+82fa9f4	0.6010	0.2020	1000	keep	rollout hybrid selected: prior blend 0.60, neural temperature 0.50, rollout value 0.25
+82fa9f4	0.6500	0.3000	200	keep	tracked public model metadata smoke eval for rollout hybrid
