@@ -660,7 +660,7 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/models/neural-policy.json")
+    fetch(`${import.meta.env.BASE_URL}models/neural-policy.json`)
       .then((response) => (response.ok ? (response.json() as Promise<NeuralModelFile>) : null))
       .then((neural) => {
         if (!cancelled) {
