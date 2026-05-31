@@ -1,4 +1,4 @@
-import { Card, rankValue, suitValue } from "../core/cards";
+import { Card, rankValue, suitIndex } from "../core/cards";
 import { Move, classifyCombo, moveKey } from "../core/combinations";
 import { GameState, legalMoves, rewardForPlayer, isTerminal } from "../core/game";
 import { ModelEvaluation, PolicyValueModel } from "./model";
@@ -44,7 +44,7 @@ const SUPPORTED_STATE_DIMS = new Set([216]);
 const MOVE_DIM = 62;
 
 function cardIndex(card: Card): number {
-  return rankValue(card.rank) * 4 + suitValue(card.suit);
+  return rankValue(card.rank) * 4 + suitIndex(card.suit);
 }
 
 function relu(values: number[]): number[] {

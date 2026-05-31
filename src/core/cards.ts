@@ -19,6 +19,7 @@ export const SUITS = ["C", "S", "H", "D"] as const;
 export type Rank = (typeof RANKS)[number];
 export type Suit = (typeof SUITS)[number];
 export type CardId = `${Rank}${Suit}`;
+export const SUIT_STRENGTH_ORDER: readonly Suit[] = ["D", "C", "H", "S"];
 
 export interface Card {
   rank: Rank;
@@ -26,9 +27,10 @@ export interface Card {
 }
 
 const RANK_VALUES = new Map<Rank, number>(RANKS.map((rank, index) => [rank, index]));
-const SUIT_VALUES = new Map<Suit, number>(SUITS.map((suit, index) => [suit, index]));
+const SUIT_VALUES = new Map<Suit, number>(SUIT_STRENGTH_ORDER.map((suit, index) => [suit, index]));
+const SUIT_INDICES = new Map<Suit, number>(SUITS.map((suit, index) => [suit, index]));
 
-export const LOWEST_CARD: Card = { rank: "3", suit: "C" };
+export const LOWEST_CARD: Card = { rank: "3", suit: "D" };
 
 export function rankValue(rank: Rank): number {
   const value = RANK_VALUES.get(rank);
@@ -40,6 +42,14 @@ export function rankValue(rank: Rank): number {
 
 export function suitValue(suit: Suit): number {
   const value = SUIT_VALUES.get(suit);
+  if (value === undefined) {
+    throw new Error(`Unknown suit: ${suit}`);
+  }
+  return value;
+}
+
+export function suitIndex(suit: Suit): number {
+  const value = SUIT_INDICES.get(suit);
   if (value === undefined) {
     throw new Error(`Unknown suit: ${suit}`);
   }

@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 RANKS = ["3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A", "2"]
-SUITS = ["C", "S", "H", "D"]
+SUITS = ["D", "C", "H", "S"]
 KIND_TO_INDEX = {
     "single": 0,
     "pair": 1,
