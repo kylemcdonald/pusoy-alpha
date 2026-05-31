@@ -13,3 +13,4 @@ scripts/__pycache__/
 *.pyc
 
 model-archive/
+research-runs/
