@@ -443,7 +443,7 @@ def main() -> None:
     parser.add_argument("--init-model", default="")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--duration-minutes", type=float, default=0)
-    parser.add_argument("--iterations", type=int, default=20)
+    parser.add_argument("--iterations", type=int, default=0)
     parser.add_argument("--batch-games", type=int, default=16)
     parser.add_argument("--simulations", type=int, default=16)
     parser.add_argument("--exploration", type=float, default=1.35)
@@ -499,7 +499,7 @@ def main() -> None:
         flush=True,
     )
 
-    while iteration < args.iterations:
+    while args.iterations <= 0 or iteration < args.iterations:
         if deadline and time.time() >= deadline and iteration > 0:
             break
         iteration += 1
