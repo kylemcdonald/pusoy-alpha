@@ -167,6 +167,7 @@ class NeuralPolicyValue:
         handcrafted_prior_weight: float | None = None,
         handcrafted_value_weight: float | None = None,
         neural_policy_temperature: float | None = None,
+        opponent_aware_prior_weight: float | None = None,
     ) -> None:
         self.model_path = model_path
         self.net = PusoyNet().to(device)
@@ -186,6 +187,10 @@ class NeuralPolicyValue:
         self.neural_policy_temperature = max(
             0.05,
             neural_policy_temperature if neural_policy_temperature is not None else inference.get("neuralPolicyTemperature", 1.0),
+        )
+        self.opponent_aware_prior_weight = max(
+            0.0,
+            min(1.0, opponent_aware_prior_weight if opponent_aware_prior_weight is not None else inference.get("opponentAwarePriorWeight", 0.0)),
         )
         self.handcrafted = HandcraftedPolicyValue()
 
@@ -222,7 +227,54 @@ class NeuralPolicyValue:
             ]
             value = (1 - self.handcrafted_value_weight) * value + self.handcrafted_value_weight * handcrafted_value_result
 
+        if self.opponent_aware_prior_weight > 0:
+            aware_priors = opponent_aware_priors(game, moves)
+            priors = [
+                (1 - self.opponent_aware_prior_weight) * prior + self.opponent_aware_prior_weight * aware_prior
+                for prior, aware_prior in zip(priors, aware_priors, strict=True)
+            ]
+
         return priors, max(-1.0, min(1.0, value))
+
+
+def opponent_can_answer(game: Game, move: Combo) -> bool:
+    next_game = clone_game(game)
+    apply_move(next_game, move)
+    if is_terminal(next_game) or next_game.current_player < 0 or next_game.active_combo is None:
+        return False
+    return any(reply is not None for reply in legal_moves(next_game))
+
+
+def opponent_aware_priors(game: Game, moves: list[Combo | None]) -> list[float]:
+    actor = game.current_player
+    scores: list[float] = []
+    for move in moves:
+        if move is None:
+            scores.append(0.05)
+            continue
+
+        remaining = len(game.hands[actor]) - move.size
+        score = 0.15 + move.size * 0.25
+        if remaining == 0:
+            score += 8.0
+        elif remaining <= 2:
+            score += 1.2
+
+        can_answer = opponent_can_answer(game, move)
+        if can_answer:
+            score -= 0.35
+        else:
+            score += 1.5 + move.size * 0.2
+
+        if any(card_rank(card) == 12 for card in move.cards) and remaining > 0:
+            score -= 0.25
+        if len(game.hands[1 - actor]) == 1 and move.size == 1:
+            score += 1.5 if not can_answer else -0.8
+
+        scores.append(max(0.01, score))
+
+    total = sum(scores)
+    return [score / total for score in scores] if total > 0 else [1 / len(moves)] * len(moves)
 
 
 def expand(
@@ -458,6 +510,7 @@ def main() -> None:
     parser.add_argument("--handcrafted-prior-weight", type=float, default=None)
     parser.add_argument("--handcrafted-value-weight", type=float, default=None)
     parser.add_argument("--neural-policy-temperature", type=float, default=None)
+    parser.add_argument("--opponent-aware-prior-weight", type=float, default=None)
     args = parser.parse_args()
 
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -473,6 +526,7 @@ def main() -> None:
         args.handcrafted_prior_weight,
         args.handcrafted_value_weight,
         args.neural_policy_temperature,
+        args.opponent_aware_prior_weight,
     )
     opponent = HandcraftedPolicyValue()
     first_places = 0
@@ -508,6 +562,7 @@ def main() -> None:
     print(f"handcrafted_prior_weight: {candidate.handcrafted_prior_weight:.4f}")
     print(f"handcrafted_value_weight: {candidate.handcrafted_value_weight:.4f}")
     print(f"neural_policy_temperature: {candidate.neural_policy_temperature:.4f}")
+    print(f"opponent_aware_prior_weight: {candidate.opponent_aware_prior_weight:.4f}")
 
 
 if __name__ == "__main__":

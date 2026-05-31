@@ -1,6 +1,6 @@
 import { Card, rankValue, suitIndex } from "../core/cards";
 import { Move, classifyCombo, moveKey } from "../core/combinations";
-import { GameState, legalMoves, rewardForPlayer, isTerminal } from "../core/game";
+import { GameState, applyLegalMove, isTerminal, legalMoves, rewardForPlayer } from "../core/game";
 import { HandcraftedModel, ModelEvaluation, PolicyValueModel } from "./model";
 
 type LayerWeights = {
@@ -34,6 +34,7 @@ export interface NeuralModelFile {
     handcraftedPriorWeight?: number;
     handcraftedValueWeight?: number;
     neuralPolicyTemperature?: number;
+    opponentAwarePriorWeight?: number;
   };
   weights: {
     state_fc: LayerWeights;
@@ -79,6 +80,11 @@ function softmax(values: number[]): number[] {
   const exp = values.map((value) => Math.exp(value - max));
   const total = exp.reduce((sum, value) => sum + value, 0);
   return exp.map((value) => value / total);
+}
+
+function normalize(values: number[]): number[] {
+  const total = values.reduce((sum, value) => sum + Math.max(0.0001, value), 0);
+  return values.map((value) => Math.max(0.0001, value) / total);
 }
 
 function stateFeatures(state: GameState, player: number, stateDim: number): number[] {
@@ -163,6 +169,7 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
   private readonly handcraftedPriorWeight: number;
   private readonly handcraftedValueWeight: number;
   private readonly neuralPolicyTemperature: number;
+  private readonly opponentAwarePriorWeight: number;
 
   constructor(private readonly file: NeuralModelFile) {
     this.name = file.name;
@@ -172,6 +179,7 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
     this.handcraftedPriorWeight = clamp01(file.inference?.handcraftedPriorWeight ?? 0);
     this.handcraftedValueWeight = clamp01(file.inference?.handcraftedValueWeight ?? 0);
     this.neuralPolicyTemperature = Math.max(0.05, file.inference?.neuralPolicyTemperature ?? 1);
+    this.opponentAwarePriorWeight = clamp01(file.inference?.opponentAwarePriorWeight ?? 0);
   }
 
   evaluate(state: GameState, perspectivePlayer: number, moves = legalMoves(state)): ModelEvaluation {
@@ -206,10 +214,61 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
         (1 - this.handcraftedPriorWeight) * neuralPrior + this.handcraftedPriorWeight * handcraftedPrior
       );
     });
+    if (this.opponentAwarePriorWeight > 0) {
+      const awarePriors = opponentAwarePriors(state, moves);
+      moves.forEach((move, index) => {
+        const key = moveKey(move);
+        const prior = priors.get(key) ?? 0;
+        priors.set(key, (1 - this.opponentAwarePriorWeight) * prior + this.opponentAwarePriorWeight * awarePriors[index]);
+      });
+    }
     const blendedValue = handcraftedEvaluation
       ? (1 - this.handcraftedValueWeight) * value + this.handcraftedValueWeight * handcraftedEvaluation.value
       : value;
 
     return { priors, value: Math.max(-1, Math.min(1, blendedValue)) };
   }
+}
+
+function opponentCanAnswer(state: GameState, move: Move): boolean {
+  if (move.type === "pass") {
+    return true;
+  }
+  const next = applyLegalMove(state, move);
+  if (isTerminal(next) || next.currentPlayer < 0 || next.activeCombo === null) {
+    return false;
+  }
+  return legalMoves(next).some((reply) => reply.type === "play");
+}
+
+function opponentAwarePriors(state: GameState, moves: Move[]): number[] {
+  const actor = state.currentPlayer;
+  const opponent = 1 - actor;
+  const scores = moves.map((move) => {
+    if (move.type === "pass") {
+      return 0.05;
+    }
+    const combo = classifyCombo(move.cards);
+    if (!combo) {
+      return 0.01;
+    }
+
+    const remaining = state.hands[actor].length - combo.size;
+    const canAnswer = opponentCanAnswer(state, move);
+    let score = 0.15 + combo.size * 0.25;
+    if (remaining === 0) {
+      score += 8;
+    } else if (remaining <= 2) {
+      score += 1.2;
+    }
+    score += canAnswer ? -0.35 : 1.5 + combo.size * 0.2;
+    if (combo.cards.some((card) => card.rank === "2") && remaining > 0) {
+      score -= 0.25;
+    }
+    if (state.hands[opponent]?.length === 1 && combo.size === 1) {
+      score += canAnswer ? -0.8 : 1.5;
+    }
+    return Math.max(0.01, score);
+  });
+  return normalize(scores);
 }
