@@ -168,6 +168,7 @@ class NeuralPolicyValue:
         handcrafted_value_weight: float | None = None,
         neural_policy_temperature: float | None = None,
         opponent_aware_prior_weight: float | None = None,
+        endgame_solver_cards: int | None = None,
     ) -> None:
         self.model_path = model_path
         self.net = PusoyNet().to(device)
@@ -192,6 +193,11 @@ class NeuralPolicyValue:
             0.0,
             min(1.0, opponent_aware_prior_weight if opponent_aware_prior_weight is not None else inference.get("opponentAwarePriorWeight", 0.0)),
         )
+        self.endgame_solver_cards = max(
+            0,
+            int(endgame_solver_cards if endgame_solver_cards is not None else inference.get("endgameSolverCards", 0)),
+        )
+        self.endgame_cache: dict[tuple[int, tuple], float] = {}
         self.handcrafted = HandcraftedPolicyValue()
 
     @torch.no_grad()
@@ -218,6 +224,10 @@ class NeuralPolicyValue:
         priors = torch.softmax(logits, dim=0).detach().cpu().tolist()
         value = float(values[0].item())
 
+        if self.endgame_solver_cards > 0 and remaining_cards(game) <= self.endgame_solver_cards:
+            value = self.solve_endgame(game, perspective_player)
+            priors = exact_policy_priors(game, perspective_player, moves, self.solve_endgame)
+
         if self.handcrafted_prior_weight > 0 or self.handcrafted_value_weight > 0:
             handcrafted_priors, handcrafted_value_result = self.handcrafted.evaluate(game, perspective_player, moves, device)
             priors = [
@@ -235,6 +245,65 @@ class NeuralPolicyValue:
             ]
 
         return priors, max(-1.0, min(1.0, value))
+
+    def solve_endgame(self, game: Game, perspective_player: int) -> float:
+        key = (perspective_player, game_key(game))
+        if key in self.endgame_cache:
+            return self.endgame_cache[key]
+        if is_terminal(game):
+            value = reward_for(game, perspective_player)
+        else:
+            moves = legal_moves(game)
+            if not moves:
+                value = 0.0
+            else:
+                child_values = []
+                for move in moves:
+                    child = clone_game(game)
+                    apply_move(child, move)
+                    child_values.append(self.solve_endgame(child, perspective_player))
+                value = max(child_values) if game.current_player == perspective_player else min(child_values)
+        self.endgame_cache[key] = value
+        return value
+
+
+def remaining_cards(game: Game) -> int:
+    return sum(len(hand) for player, hand in enumerate(game.hands) if player not in (game.finished or []))
+
+
+def game_key(game: Game) -> tuple:
+    active = tuple(game.active_combo.cards) if game.active_combo else ()
+    return (
+        tuple(game.hands[0]),
+        tuple(game.hands[1]),
+        game.current_player,
+        active,
+        game.last_player,
+        game.passes_since_play,
+        tuple(game.finished or []),
+        0 if game.turns == 0 else 1,
+    )
+
+
+def exact_policy_priors(
+    game: Game,
+    perspective_player: int,
+    moves: list[Combo | None],
+    solver: callable,
+) -> list[float]:
+    if not moves:
+        return []
+    values = []
+    for move in moves:
+        child = clone_game(game)
+        apply_move(child, move)
+        values.append(solver(child, perspective_player))
+    scale = 4.0 if game.current_player == perspective_player else -4.0
+    logits = [value * scale for value in values]
+    top = max(logits)
+    exp = [math.exp(logit - top) for logit in logits]
+    total = sum(exp)
+    return [value / total for value in exp] if total > 0 else [1 / len(moves)] * len(moves)
 
 
 def opponent_can_answer(game: Game, move: Combo) -> bool:
@@ -511,6 +580,7 @@ def main() -> None:
     parser.add_argument("--handcrafted-value-weight", type=float, default=None)
     parser.add_argument("--neural-policy-temperature", type=float, default=None)
     parser.add_argument("--opponent-aware-prior-weight", type=float, default=None)
+    parser.add_argument("--endgame-solver-cards", type=int, default=None)
     args = parser.parse_args()
 
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -527,6 +597,7 @@ def main() -> None:
         args.handcrafted_value_weight,
         args.neural_policy_temperature,
         args.opponent_aware_prior_weight,
+        args.endgame_solver_cards,
     )
     opponent = HandcraftedPolicyValue()
     first_places = 0
@@ -563,6 +634,7 @@ def main() -> None:
     print(f"handcrafted_value_weight: {candidate.handcrafted_value_weight:.4f}")
     print(f"neural_policy_temperature: {candidate.neural_policy_temperature:.4f}")
     print(f"opponent_aware_prior_weight: {candidate.opponent_aware_prior_weight:.4f}")
+    print(f"endgame_solver_cards: {candidate.endgame_solver_cards}")
 
 
 if __name__ == "__main__":

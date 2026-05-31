@@ -1,4 +1,4 @@
-import { Card, rankValue, suitIndex } from "../core/cards";
+import { Card, cardId, rankValue, suitIndex } from "../core/cards";
 import { Move, classifyCombo, moveKey } from "../core/combinations";
 import { GameState, applyLegalMove, isTerminal, legalMoves, rewardForPlayer } from "../core/game";
 import { HandcraftedModel, ModelEvaluation, PolicyValueModel } from "./model";
@@ -35,6 +35,7 @@ export interface NeuralModelFile {
     handcraftedValueWeight?: number;
     neuralPolicyTemperature?: number;
     opponentAwarePriorWeight?: number;
+    endgameSolverCards?: number;
   };
   weights: {
     state_fc: LayerWeights;
@@ -170,6 +171,8 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
   private readonly handcraftedValueWeight: number;
   private readonly neuralPolicyTemperature: number;
   private readonly opponentAwarePriorWeight: number;
+  private readonly endgameSolverCards: number;
+  private readonly endgameCache = new Map<string, number>();
 
   constructor(private readonly file: NeuralModelFile) {
     this.name = file.name;
@@ -180,6 +183,7 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
     this.handcraftedValueWeight = clamp01(file.inference?.handcraftedValueWeight ?? 0);
     this.neuralPolicyTemperature = Math.max(0.05, file.inference?.neuralPolicyTemperature ?? 1);
     this.opponentAwarePriorWeight = clamp01(file.inference?.opponentAwarePriorWeight ?? 0);
+    this.endgameSolverCards = Math.max(0, Math.floor(file.inference?.endgameSolverCards ?? 0));
   }
 
   evaluate(state: GameState, perspectivePlayer: number, moves = legalMoves(state)): ModelEvaluation {
@@ -191,7 +195,6 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
     const stateInput = stateFeatures(state, perspectivePlayer, this.file.architecture.stateDim);
     const stateHidden = relu(linear(stateInput, weights.state_fc));
     const valueHidden = relu(linear(stateHidden, weights.value_fc));
-    const value = tanh(linear(valueHidden, weights.value_out)[0] ?? 0);
     const logits = moves.map((move) => {
       const moveHidden = relu(linear(moveFeatures(move, this.file.architecture.comboKinds), weights.move_fc));
       const policyInput = [...stateHidden, ...moveHidden];
@@ -200,6 +203,14 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
     });
     const scaledLogits = logits.map((logit) => logit / this.neuralPolicyTemperature);
     const probabilities = scaledLogits.length > 0 ? softmax(scaledLogits) : [];
+    let value = tanh(linear(valueHidden, weights.value_out)[0] ?? 0);
+    let baseProbabilities = probabilities;
+    if (this.endgameSolverCards > 0 && remainingCards(state) <= this.endgameSolverCards) {
+      value = this.solveEndgame(state, perspectivePlayer);
+      baseProbabilities = exactPolicyPriors(state, perspectivePlayer, moves, (next) =>
+        this.solveEndgame(next, perspectivePlayer)
+      );
+    }
     const handcraftedEvaluation =
       this.handcraftedPriorWeight > 0 || this.handcraftedValueWeight > 0
         ? this.handcrafted.evaluate(state, perspectivePlayer, moves)
@@ -207,7 +218,7 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
     const priors = new Map<string, number>();
     moves.forEach((move, index) => {
       const key = moveKey(move);
-      const neuralPrior = probabilities[index] ?? 0;
+      const neuralPrior = baseProbabilities[index] ?? 0;
       const handcraftedPrior = handcraftedEvaluation?.priors.get(key) ?? neuralPrior;
       priors.set(
         key,
@@ -227,6 +238,33 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
       : value;
 
     return { priors, value: Math.max(-1, Math.min(1, blendedValue)) };
+  }
+
+  private solveEndgame(state: GameState, perspectivePlayer: number): number {
+    const key = `${perspectivePlayer}:${endgameKey(state)}`;
+    const cached = this.endgameCache.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    let value: number;
+    if (isTerminal(state)) {
+      value = rewardForPlayer(state, perspectivePlayer);
+    } else {
+      const moves = legalMoves(state);
+      if (moves.length === 0) {
+        value = 0;
+      } else {
+        const childValues = moves.map((move) => this.solveEndgame(applyLegalMove(state, move), perspectivePlayer));
+        value =
+          state.currentPlayer === perspectivePlayer
+            ? Math.max(...childValues)
+            : Math.min(...childValues);
+      }
+    }
+
+    this.endgameCache.set(key, value);
+    return value;
   }
 }
 
@@ -271,4 +309,33 @@ function opponentAwarePriors(state: GameState, moves: Move[]): number[] {
     return Math.max(0.01, score);
   });
   return normalize(scores);
+}
+
+function remainingCards(state: GameState): number {
+  return state.hands.reduce((sum, hand, player) => {
+    return state.finished.includes(player) ? sum : sum + hand.length;
+  }, 0);
+}
+
+function endgameKey(state: GameState): string {
+  const active = state.activeCombo?.cards.map(cardId).join("-") ?? "";
+  return [
+    state.hands[0].map(cardId).join("-"),
+    state.hands[1].map(cardId).join("-"),
+    state.currentPlayer,
+    active,
+    state.lastPlayer ?? "n",
+    state.passesSincePlay,
+    state.finished.join("-"),
+    state.history.length === 0 ? 0 : 1
+  ].join("|");
+}
+
+function exactPolicyPriors(state: GameState, perspectivePlayer: number, moves: Move[], solver: (state: GameState) => number): number[] {
+  if (moves.length === 0) {
+    return [];
+  }
+  const scale = state.currentPlayer === perspectivePlayer ? 4 : -4;
+  const logits = moves.map((move) => solver(applyLegalMove(state, move)) * scale);
+  return softmax(logits);
 }

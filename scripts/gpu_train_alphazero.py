@@ -637,6 +637,7 @@ def save_model(
             "handcraftedValueWeight": args.handcrafted_value_weight,
             "neuralPolicyTemperature": args.neural_policy_temperature,
             "opponentAwarePriorWeight": args.opponent_aware_prior_weight,
+            "endgameSolverCards": args.endgame_solver_cards,
         },
         "weights": {
             "state_fc": layer_to_json(net.state_fc),
@@ -685,6 +686,7 @@ def main() -> None:
     parser.add_argument("--handcrafted-value-weight", type=float, default=0.0)
     parser.add_argument("--neural-policy-temperature", type=float, default=1.0)
     parser.add_argument("--opponent-aware-prior-weight", type=float, default=0.0)
+    parser.add_argument("--endgame-solver-cards", type=int, default=0)
     parser.add_argument("--seed", type=int, default=20260531)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--save-interval", type=int, default=1)
