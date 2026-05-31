@@ -20,6 +20,7 @@ from pusoy_gpu import (
     Game,
     PusoyNet,
     apply_move,
+    card_rank,
     create_game,
     is_terminal,
     layer_to_json,
@@ -182,6 +183,55 @@ def normalized_counts(children: list[MctsEdge]) -> list[float]:
     return [count / total for count in counts]
 
 
+def combo_strength(combo: Combo) -> float:
+    raw = sum(value / (index + 1) for index, value in enumerate(combo.tiebreak))
+    return raw / 70
+
+
+def handcrafted_move_score(game: Game, move: Combo | None) -> float:
+    if move is None:
+        return 0.08
+
+    actor = game.current_player
+    remaining_after_move = len(game.hands[actor]) - move.size
+    score = 0.25 + move.size * 0.18
+
+    if remaining_after_move == 0:
+        score += 5.0
+    elif remaining_after_move <= 2:
+        score += 0.8
+
+    if game.active_combo:
+        score += max(0.0, 0.45 - combo_strength(move))
+    else:
+        score += max(0.0, 0.7 - combo_strength(move))
+
+    has_rank_two = any(card_rank(card) == 12 for card in move.cards)
+    if has_rank_two and remaining_after_move > 0:
+        score -= 0.2
+
+    next_player = 1 - actor
+    if len(game.hands[next_player]) == 1 and move.size == 1:
+        score += combo_strength(move) * 0.6
+
+    return max(0.01, score)
+
+
+def select_handcrafted_move(game: Game, rng: random.Random, temperature: float) -> Combo | None:
+    moves = legal_moves(game)
+    if not moves:
+        return None
+    if len(moves) == 1:
+        return moves[0]
+
+    scores = [handcrafted_move_score(game, move) for move in moves]
+    if temperature <= 0:
+        return moves[max(range(len(moves)), key=lambda index: scores[index])]
+
+    exponent = 1.0 / max(temperature, 0.05)
+    return moves[sample_index([score**exponent for score in scores], rng)]
+
+
 def select_from_visits(
     children: list[MctsEdge],
     turn: int,
@@ -230,7 +280,7 @@ def mcts_search(
     return [edge.move for edge in root.children], target, action, root_value
 
 
-def play_batch(
+def play_self_play_batch(
     net: PusoyNet,
     batch_games: int,
     device: torch.device,
@@ -289,6 +339,87 @@ def play_batch(
         "average_target_top": target_top_sum / max(1, searches),
         "average_root_value": value_sum / max(1, searches),
     }
+
+
+def play_handcrafted_opponent_batch(
+    net: PusoyNet,
+    batch_games: int,
+    device: torch.device,
+    rng: random.Random,
+    args: argparse.Namespace,
+) -> tuple[list[AlphaTransition], dict[str, float]]:
+    transitions: list[AlphaTransition] = []
+    wins = 0
+    turns = 0
+    target_top_sum = 0.0
+    value_sum = 0.0
+    searches = 0
+
+    net.eval()
+    for game_index in range(batch_games):
+        game = create_game(rng)
+        candidate_seat = game_index % 2
+        start = len(transitions)
+
+        while not is_terminal(game) and game.turns < args.max_turns:
+            player = game.current_player
+            if player == candidate_seat:
+                moves, target, action, root_value = mcts_search(
+                    net,
+                    game,
+                    device,
+                    rng,
+                    args.simulations,
+                    args.exploration,
+                    args.root_dirichlet_alpha,
+                    args.root_noise_fraction,
+                    args.temperature,
+                    args.temperature_turns,
+                )
+                if not moves:
+                    break
+                transitions.append(
+                    AlphaTransition(
+                        state=state_features(game, player),
+                        moves=[move_features(move) for move in moves],
+                        target=target,
+                        player=player,
+                    )
+                )
+                target_top_sum += max(target)
+                value_sum += root_value
+                searches += 1
+                apply_move(game, moves[action])
+            else:
+                move = select_handcrafted_move(game, rng, args.handcrafted_temperature)
+                if move not in legal_moves(game):
+                    break
+                apply_move(game, move)
+
+        turns += game.turns
+        if placements(game)[0] == candidate_seat:
+            wins += 1
+        for transition in transitions[start:]:
+            transition.reward = reward_for(game, transition.player)
+
+    return transitions, {
+        "win_rate_p0": wins / max(1, batch_games),
+        "average_turns": turns / max(1, batch_games),
+        "average_target_top": target_top_sum / max(1, searches),
+        "average_root_value": value_sum / max(1, searches),
+    }
+
+
+def play_batch(
+    net: PusoyNet,
+    batch_games: int,
+    device: torch.device,
+    rng: random.Random,
+    args: argparse.Namespace,
+) -> tuple[list[AlphaTransition], dict[str, float]]:
+    if args.opponent_mode == "handcrafted":
+        return play_handcrafted_opponent_batch(net, batch_games, device, rng, args)
+    return play_self_play_batch(net, batch_games, device, rng, args)
 
 
 def train_transitions(
@@ -411,6 +542,8 @@ def save_model(
             "rootNoiseFraction": args.root_noise_fraction,
             "replaySize": args.replay_size,
             "trainSamples": args.train_samples,
+            "opponentMode": args.opponent_mode,
+            "handcraftedTemperature": args.handcrafted_temperature,
             "history": history,
             "note": "AlphaZero-style self-play: MCTS visit counts train the policy head and terminal outcomes train the value head. Browser inference uses exported JSON weights.",
         },
@@ -451,6 +584,8 @@ def main() -> None:
     parser.add_argument("--temperature-turns", type=int, default=10)
     parser.add_argument("--root-dirichlet-alpha", type=float, default=0.3)
     parser.add_argument("--root-noise-fraction", type=float, default=0.18)
+    parser.add_argument("--opponent-mode", choices=["self", "handcrafted"], default="self")
+    parser.add_argument("--handcrafted-temperature", type=float, default=0.0)
     parser.add_argument("--max-turns", type=int, default=160)
     parser.add_argument("--replay-size", type=int, default=50000)
     parser.add_argument("--train-samples", type=int, default=2048)
