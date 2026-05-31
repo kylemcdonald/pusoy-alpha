@@ -13,7 +13,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 RANKS = ["3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A", "2"]
-SUITS = ["D", "C", "H", "S"]
+SUITS = ["C", "S", "H", "D"]
+SUIT_STRENGTH_ORDER = ["D", "C", "H", "S"]
+SUIT_STRENGTHS = [SUIT_STRENGTH_ORDER.index(suit) for suit in SUITS]
+LOWEST_CARD = RANKS.index("3") * len(SUITS) + SUITS.index("D")
 KIND_TO_INDEX = {
     "single": 0,
     "pair": 1,
@@ -107,6 +110,14 @@ def card_suit(card: int) -> int:
     return card % 4
 
 
+def card_suit_strength(card: int) -> int:
+    return SUIT_STRENGTHS[card_suit(card)]
+
+
+def card_power(card: int) -> int:
+    return card_rank(card) * 4 + card_suit_strength(card)
+
+
 def card_label(card: int) -> str:
     return f"{RANKS[card_rank(card)]}{SUITS[card_suit(card)]}"
 
@@ -119,9 +130,9 @@ def classify(cards_in: Iterable[int]) -> Combo | None:
         ranks.setdefault(card_rank(card), []).append(card)
 
     if size == 1:
-        return Combo("single", cards, 1, (float(cards[0]),))
+        return Combo("single", cards, 1, (float(card_power(cards[0])),))
     if size == 2 and len(ranks) == 1:
-        return Combo("pair", cards, 2, (float(next(iter(ranks))), float(max(card_suit(card) for card in cards))))
+        return Combo("pair", cards, 2, (float(next(iter(ranks))), float(max(card_suit_strength(card) for card in cards))))
     if size == 3 and len(ranks) == 1:
         return Combo("triple", cards, 3, (float(next(iter(ranks))),))
     if size != 5:
@@ -134,7 +145,7 @@ def classify(cards_in: Iterable[int]) -> Combo | None:
 
     if straight_order is not None and is_flush:
         top_rank = max(rank_values)
-        top_suit = max(card_suit(card) for card in cards if card_rank(card) == top_rank)
+        top_suit = max(card_suit_strength(card) for card in cards if card_rank(card) == top_rank)
         return Combo("straight-flush", cards, 5, (4.0, float(straight_order), float(top_suit)))
     if len(groups[0][1]) == 4:
         return Combo("four-kind", cards, 5, (3.0, float(groups[0][0])))
@@ -142,10 +153,10 @@ def classify(cards_in: Iterable[int]) -> Combo | None:
         return Combo("full-house", cards, 5, (2.0, float(groups[0][0])))
     if is_flush:
         descending_ranks = sorted((card_rank(card) for card in cards), reverse=True)
-        return Combo("flush", cards, 5, (1.0, float(card_suit(cards[0])), *map(float, descending_ranks)))
+        return Combo("flush", cards, 5, (1.0, float(card_suit_strength(cards[0])), *map(float, descending_ranks)))
     if straight_order is not None:
         top_rank = max(rank_values)
-        top_suit = max(card_suit(card) for card in cards if card_rank(card) == top_rank)
+        top_suit = max(card_suit_strength(card) for card in cards if card_rank(card) == top_rank)
         return Combo("straight", cards, 5, (0.0, float(straight_order), float(top_suit)))
     return None
 
@@ -191,12 +202,12 @@ def enumerate_combos(hand: list[int]) -> list[Combo]:
 def create_game(rng: random.Random) -> Game:
     deck = list(range(52))
     rng.shuffle(deck)
-    if 0 not in deck[:26]:
+    if LOWEST_CARD not in deck[:26]:
         swap_index = rng.randrange(26)
-        lowest_index = deck.index(0)
+        lowest_index = deck.index(LOWEST_CARD)
         deck[swap_index], deck[lowest_index] = deck[lowest_index], deck[swap_index]
     hands = [sorted(deck[:13]), sorted(deck[13:26])]
-    current_player = 0 if 0 in hands[0] else 1
+    current_player = 0 if LOWEST_CARD in hands[0] else 1
     return Game(hands=hands, current_player=current_player)
 
 
@@ -234,7 +245,7 @@ def legal_moves(game: Game) -> list[Combo | None]:
         return []
     combos = enumerate_combos(game.hands[game.current_player])
     if game.turns == 0:
-        combos = [combo for combo in combos if 0 in combo.cards]
+        combos = [combo for combo in combos if LOWEST_CARD in combo.cards]
     if game.active_combo:
         combos = [combo for combo in combos if compare_combos(combo, game.active_combo) > 0]
     moves: list[Combo | None] = list(combos)
