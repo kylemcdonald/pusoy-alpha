@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import random
 from dataclasses import dataclass
@@ -158,12 +159,34 @@ class HandcraftedPolicyValue:
 class NeuralPolicyValue:
     name = "neural"
 
-    def __init__(self, model_path: Path, device: torch.device) -> None:
+    def __init__(
+        self,
+        model_path: Path,
+        device: torch.device,
+        handcrafted_prior_weight: float | None = None,
+        handcrafted_value_weight: float | None = None,
+        neural_policy_temperature: float | None = None,
+    ) -> None:
         self.model_path = model_path
         self.net = PusoyNet().to(device)
         if not load_json_weights(self.net, model_path):
             raise SystemExit(f"Could not load neural weights from {model_path}")
         self.net.eval()
+        data = json.loads(model_path.read_text())
+        inference = data.get("inference", {})
+        self.handcrafted_prior_weight = max(
+            0.0,
+            min(1.0, handcrafted_prior_weight if handcrafted_prior_weight is not None else inference.get("handcraftedPriorWeight", 0.0)),
+        )
+        self.handcrafted_value_weight = max(
+            0.0,
+            min(1.0, handcrafted_value_weight if handcrafted_value_weight is not None else inference.get("handcraftedValueWeight", 0.0)),
+        )
+        self.neural_policy_temperature = max(
+            0.05,
+            neural_policy_temperature if neural_policy_temperature is not None else inference.get("neuralPolicyTemperature", 1.0),
+        )
+        self.handcrafted = HandcraftedPolicyValue()
 
     @torch.no_grad()
     def evaluate(
@@ -185,8 +208,20 @@ class NeuralPolicyValue:
         )
         move_t = torch.tensor([move_features(move) for move in moves], device=device, dtype=torch.float32)
         logits, values = self.net(states, move_t)
+        logits = logits / self.neural_policy_temperature
         priors = torch.softmax(logits, dim=0).detach().cpu().tolist()
-        return priors, float(values[0].item())
+        value = float(values[0].item())
+
+        if self.handcrafted_prior_weight > 0 or self.handcrafted_value_weight > 0:
+            handcrafted_priors, handcrafted_value_result = self.handcrafted.evaluate(game, perspective_player, moves, device)
+            priors = [
+                (1 - self.handcrafted_prior_weight) * neural_prior
+                + self.handcrafted_prior_weight * handcrafted_prior
+                for neural_prior, handcrafted_prior in zip(priors, handcrafted_priors, strict=True)
+            ]
+            value = (1 - self.handcrafted_value_weight) * value + self.handcrafted_value_weight * handcrafted_value_result
+
+        return priors, max(-1.0, min(1.0, value))
 
 
 def expand(
@@ -419,6 +454,9 @@ def main() -> None:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--reveal-opponents", action="store_true")
     parser.add_argument("--policy-perspective", choices=["actor", "root"], default="actor")
+    parser.add_argument("--handcrafted-prior-weight", type=float, default=None)
+    parser.add_argument("--handcrafted-value-weight", type=float, default=None)
+    parser.add_argument("--neural-policy-temperature", type=float, default=None)
     args = parser.parse_args()
 
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -428,7 +466,13 @@ def main() -> None:
         torch.cuda.set_device(0)
         torch.set_float32_matmul_precision("high")
 
-    candidate = NeuralPolicyValue(Path(args.model), device)
+    candidate = NeuralPolicyValue(
+        Path(args.model),
+        device,
+        args.handcrafted_prior_weight,
+        args.handcrafted_value_weight,
+        args.neural_policy_temperature,
+    )
     opponent = HandcraftedPolicyValue()
     first_places = 0
     total_reward = 0.0
@@ -460,6 +504,9 @@ def main() -> None:
     print(f"determinizations: {args.determinizations}")
     print(f"policy_perspective: {args.policy_perspective}")
     print(f"reveal_opponents: {args.reveal_opponents}")
+    print(f"handcrafted_prior_weight: {candidate.handcrafted_prior_weight:.4f}")
+    print(f"handcrafted_value_weight: {candidate.handcrafted_value_weight:.4f}")
+    print(f"neural_policy_temperature: {candidate.neural_policy_temperature:.4f}")
 
 
 if __name__ == "__main__":

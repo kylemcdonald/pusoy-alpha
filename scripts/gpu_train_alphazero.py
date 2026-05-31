@@ -414,6 +414,11 @@ def save_model(
             "history": history,
             "note": "AlphaZero-style self-play: MCTS visit counts train the policy head and terminal outcomes train the value head. Browser inference uses exported JSON weights.",
         },
+        "inference": {
+            "handcraftedPriorWeight": args.handcrafted_prior_weight,
+            "handcraftedValueWeight": args.handcrafted_value_weight,
+            "neuralPolicyTemperature": args.neural_policy_temperature,
+        },
         "weights": {
             "state_fc": layer_to_json(net.state_fc),
             "move_fc": layer_to_json(net.move_fc),
@@ -454,6 +459,9 @@ def main() -> None:
     parser.add_argument("--value-weight", type=float, default=0.5)
     parser.add_argument("--entropy-weight", type=float, default=0.001)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--handcrafted-prior-weight", type=float, default=0.0)
+    parser.add_argument("--handcrafted-value-weight", type=float, default=0.0)
+    parser.add_argument("--neural-policy-temperature", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=20260531)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--save-interval", type=int, default=1)

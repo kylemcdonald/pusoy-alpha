@@ -1,7 +1,7 @@
 import { Card, rankValue, suitValue } from "../core/cards";
 import { Move, classifyCombo, moveKey } from "../core/combinations";
 import { GameState, legalMoves, rewardForPlayer, isTerminal } from "../core/game";
-import { ModelEvaluation, PolicyValueModel } from "./model";
+import { HandcraftedModel, ModelEvaluation, PolicyValueModel } from "./model";
 
 type LayerWeights = {
   weight: number[][];
@@ -30,6 +30,11 @@ export interface NeuralModelFile {
     history: Array<Record<string, number>>;
     note?: string;
   };
+  inference?: {
+    handcraftedPriorWeight?: number;
+    handcraftedValueWeight?: number;
+    neuralPolicyTemperature?: number;
+  };
   weights: {
     state_fc: LayerWeights;
     move_fc: LayerWeights;
@@ -53,6 +58,10 @@ function relu(values: number[]): number[] {
 
 function tanh(value: number): number {
   return Math.tanh(value);
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
 }
 
 function linear(input: number[], layer: LayerWeights): number[] {
@@ -150,12 +159,19 @@ function moveFeatures(move: Move, comboKinds: Record<string, number>): number[] 
 
 export class NeuralPolicyValueModel implements PolicyValueModel {
   readonly name: string;
+  private readonly handcrafted = new HandcraftedModel();
+  private readonly handcraftedPriorWeight: number;
+  private readonly handcraftedValueWeight: number;
+  private readonly neuralPolicyTemperature: number;
 
   constructor(private readonly file: NeuralModelFile) {
     this.name = file.name;
     if (!SUPPORTED_STATE_DIMS.has(file.architecture.stateDim) || file.architecture.moveDim !== MOVE_DIM) {
       throw new Error(`Unsupported neural model dimensions: ${file.architecture.stateDim}/${file.architecture.moveDim}`);
     }
+    this.handcraftedPriorWeight = clamp01(file.inference?.handcraftedPriorWeight ?? 0);
+    this.handcraftedValueWeight = clamp01(file.inference?.handcraftedValueWeight ?? 0);
+    this.neuralPolicyTemperature = Math.max(0.05, file.inference?.neuralPolicyTemperature ?? 1);
   }
 
   evaluate(state: GameState, perspectivePlayer: number, moves = legalMoves(state)): ModelEvaluation {
@@ -174,12 +190,26 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
       const policyHidden = relu(linear(policyInput, weights.policy_fc));
       return linear(policyHidden, weights.policy_out)[0] ?? 0;
     });
-    const probabilities = logits.length > 0 ? softmax(logits) : [];
+    const scaledLogits = logits.map((logit) => logit / this.neuralPolicyTemperature);
+    const probabilities = scaledLogits.length > 0 ? softmax(scaledLogits) : [];
+    const handcraftedEvaluation =
+      this.handcraftedPriorWeight > 0 || this.handcraftedValueWeight > 0
+        ? this.handcrafted.evaluate(state, perspectivePlayer, moves)
+        : null;
     const priors = new Map<string, number>();
     moves.forEach((move, index) => {
-      priors.set(moveKey(move), probabilities[index] ?? 0);
+      const key = moveKey(move);
+      const neuralPrior = probabilities[index] ?? 0;
+      const handcraftedPrior = handcraftedEvaluation?.priors.get(key) ?? neuralPrior;
+      priors.set(
+        key,
+        (1 - this.handcraftedPriorWeight) * neuralPrior + this.handcraftedPriorWeight * handcraftedPrior
+      );
     });
+    const blendedValue = handcraftedEvaluation
+      ? (1 - this.handcraftedValueWeight) * value + this.handcraftedValueWeight * handcraftedEvaluation.value
+      : value;
 
-    return { priors, value };
+    return { priors, value: Math.max(-1, Math.min(1, blendedValue)) };
   }
 }
