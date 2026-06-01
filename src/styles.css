@@ -433,13 +433,27 @@ button {
 .timeline li {
   min-width: 0;
   display: grid;
-  grid-template-columns: 46px minmax(0, 1fr);
+  grid-template-columns: 46px minmax(0, 1fr) 32px;
   gap: 8px;
   align-items: center;
   padding: 9px 10px;
   background: #fbfbf7;
   border: 1px solid var(--border);
   border-radius: 7px;
+}
+
+.timeline li.current {
+  outline: 2px solid rgba(194, 120, 3, 0.75);
+  outline-offset: 1px;
+}
+
+.timeline li.future {
+  border-style: dashed;
+}
+
+.timeline li.future span,
+.timeline li.future strong {
+  opacity: 0.58;
 }
 
 .timeline span {
@@ -453,6 +467,12 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.84rem;
+}
+
+.timeline .timeline-jump {
+  width: 32px;
+  min-height: 32px;
+  border-radius: 6px;
 }
 
 @media (max-width: 980px) {

@@ -2,10 +2,12 @@ import {
   ArrowDown,
   ArrowUp,
   Bot,
+  CornerUpLeft,
   RefreshCw,
   RotateCcw,
   Settings,
   Trophy,
+  Undo2,
   User,
   X
 } from "lucide-react";
@@ -262,10 +264,12 @@ function MoveTray({
   hintButton,
   canShowHint,
   canAutoplay,
+  canGoBack,
   onShowHint,
   onPlay,
   onPass,
   onAutoplay,
+  onBack,
   onClear
 }: {
   selectedCards: Card[];
@@ -276,15 +280,20 @@ function MoveTray({
   hintButton: "show-hint" | "autoplay";
   canShowHint: boolean;
   canAutoplay: boolean;
+  canGoBack: boolean;
   onShowHint: () => void;
   onPlay: () => void;
   onPass: () => void;
   onAutoplay: () => void;
+  onBack: () => void;
   onClear: () => void;
 }) {
   return (
     <div className="move-tray">
       <div className="button-row">
+        <button className="icon-button" disabled={busy || !canGoBack} onClick={onBack} title="Back one turn" type="button">
+          <Undo2 size={18} />
+        </button>
         <button className="icon-button" disabled={busy || selectedCards.length === 0} onClick={onClear} title="Clear" type="button">
           <RotateCcw size={18} />
         </button>
@@ -314,13 +323,42 @@ function MoveTray({
   );
 }
 
-function Timeline({ state, suitOrder }: { state: GameState; suitOrder: Suit[] }) {
+function Timeline({
+  busy,
+  currentIndex,
+  onJump,
+  suitOrder,
+  timeline
+}: {
+  busy: boolean;
+  currentIndex: number;
+  onJump: (index: number) => void;
+  suitOrder: Suit[];
+  timeline: GameState[];
+}) {
+  const entries = timeline.slice(1).map((state, index) => ({
+    entry: state.history[state.history.length - 1],
+    stateIndex: index + 1
+  }));
+
   return (
     <ol className="timeline">
-      {state.history.slice(-12).map((entry) => (
-        <li key={`${entry.turn}-${entry.player}`}>
+      {entries.map(({ entry, stateIndex }) => (
+        <li
+          className={`${stateIndex === currentIndex ? "current" : ""} ${stateIndex > currentIndex ? "future" : ""}`}
+          key={`${stateIndex}-${entry.turn}-${entry.player}`}
+        >
           <span>{PLAYER_LABELS[entry.player]}</span>
           <strong>{formatMoveDisplay(entry.move, suitOrder)}</strong>
+          <button
+            className="icon-button timeline-jump"
+            disabled={busy || stateIndex === currentIndex}
+            onClick={() => onJump(stateIndex)}
+            title={stateIndex === currentIndex ? "Current state" : `Reset to turn ${entry.turn}`}
+            type="button"
+          >
+            <CornerUpLeft size={15} />
+          </button>
         </li>
       ))}
     </ol>
@@ -356,6 +394,16 @@ function createHumanGame(): GameState {
   return createGame(`human-${Date.now()}`);
 }
 
+function previousHumanTurnIndex(timeline: GameState[], currentIndex: number): number {
+  for (let index = currentIndex - 1; index >= 0; index -= 1) {
+    const state = timeline[index];
+    if (!isTerminal(state) && state.currentPlayer === HUMAN_PLAYER) {
+      return index;
+    }
+  }
+  return Math.max(0, currentIndex - 1);
+}
+
 function PlayAgainstAi({
   alwaysShowHints,
   model,
@@ -367,13 +415,54 @@ function PlayAgainstAi({
   onOpenSettings: () => void;
   suitOrder: Suit[];
 }) {
-  const [game, setGame] = useState<GameState>(() => createHumanGame());
+  const [timeline, setTimeline] = useState<GameState[]>(() => [createHumanGame()]);
+  const [currentIndex, setCurrentIndex] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [singleHint, setSingleHint] = useState(false);
   const [suggestion, setSuggestion] = useState<SearchResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const timelineRef = useRef(timeline);
+  const currentIndexRef = useRef(currentIndex);
   const busyRef = useRef(false);
+  const game = (timeline[currentIndex] ?? timeline[timeline.length - 1])!;
   const hintsActive = alwaysShowHints || singleHint;
+  const canGoBack = currentIndex > 0;
+
+  useEffect(() => {
+    timelineRef.current = timeline;
+  }, [timeline]);
+
+  useEffect(() => {
+    currentIndexRef.current = currentIndex;
+  }, [currentIndex]);
+
+  const setTimelinePosition = (nextTimeline: GameState[], nextIndex: number) => {
+    timelineRef.current = nextTimeline;
+    currentIndexRef.current = nextIndex;
+    setTimeline(nextTimeline);
+    setCurrentIndex(nextIndex);
+  };
+
+  const appendGameState = (next: GameState) => {
+    const baseTimeline = timelineRef.current.slice(0, currentIndexRef.current + 1);
+    const nextTimeline = [...baseTimeline, next];
+    setTimelinePosition(nextTimeline, nextTimeline.length - 1);
+  };
+
+  const jumpToState = (index: number) => {
+    if (busyRef.current || index < 0 || index >= timelineRef.current.length) {
+      return;
+    }
+    setSelected(new Set());
+    setSingleHint(false);
+    setSuggestion(null);
+    currentIndexRef.current = index;
+    setCurrentIndex(index);
+  };
+
+  const backOneTurn = () => {
+    jumpToState(previousHumanTurnIndex(timelineRef.current, currentIndexRef.current));
+  };
 
   const selectedCards = useMemo(() => {
     return sortCardsForDisplay(game.hands[HUMAN_PLAYER].filter((card) => selected.has(cardId(card))), suitOrder);
@@ -434,7 +523,7 @@ function PlayAgainstAi({
         rng: createRng(`${next.id}:${next.history.length}:${player}`)
       });
       next = applyMove(next, result.move);
-      setGame(next);
+      appendGameState(next);
       guard += 1;
     }
 
@@ -480,13 +569,15 @@ function PlayAgainstAi({
     const next = applyMove(game, move);
     setSelected(new Set());
     setSingleHint(false);
-    setGame(next);
+    appendGameState(next);
   };
 
   const reset = () => {
+    const next = createHumanGame();
     setSelected(new Set());
     setSingleHint(false);
-    setGame(createHumanGame());
+    setSuggestion(null);
+    setTimelinePosition([next], 0);
   };
 
   const requestHint = () => {
@@ -537,13 +628,15 @@ function PlayAgainstAi({
         />
 
         <MoveTray
-          busy={busy || isTerminal(game)}
+          busy={busy}
           canAutoplay={canAutoplay}
+          canGoBack={canGoBack}
           canPass={canPass}
           canPlay={canPlay}
           canShowHint={canShowHint}
           hintButton={hintButton}
           onAutoplay={autoplaySuggestion}
+          onBack={backOneTurn}
           onClear={() => setSelected(new Set())}
           onPass={() => applyHumanMove(PASS_MOVE)}
           onPlay={() => selectedMove && selectedMove.type === "play" && applyHumanMove(selectedMove)}
@@ -555,7 +648,7 @@ function PlayAgainstAi({
 
       <aside className="side-rail">
         <div className="rail-actions">
-          <button className="icon-button" onClick={reset} title="New deal" type="button">
+          <button className="icon-button" disabled={busy} onClick={reset} title="New deal" type="button">
             <RefreshCw size={18} />
           </button>
           <button className="icon-button" onClick={onOpenSettings} title="Settings" type="button">
@@ -563,7 +656,13 @@ function PlayAgainstAi({
           </button>
         </div>
         <Scoreboard state={game} />
-        <Timeline state={game} suitOrder={suitOrder} />
+        <Timeline
+          busy={busy}
+          currentIndex={currentIndex}
+          onJump={jumpToState}
+          suitOrder={suitOrder}
+          timeline={timeline}
+        />
       </aside>
     </main>
   );
