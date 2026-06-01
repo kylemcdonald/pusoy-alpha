@@ -335,7 +335,7 @@ function MoveTray({
         </button>
         {hintButton === "show-hint" ? (
           <button className="command-button" disabled={busy || !canShowHint} onClick={onShowHint} type="button">
-            Show hint
+            Hint
           </button>
         ) : null}
         {hintButton === "autoplay" ? (
