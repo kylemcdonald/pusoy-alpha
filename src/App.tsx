@@ -21,6 +21,7 @@ import {
   Suit,
   applyMove,
   cardId,
+  cloneGameState,
   createGame,
   findMoveByCards,
   isTerminal,
@@ -53,7 +54,13 @@ const SETTINGS_KEY = "pusoy-alpha-settings";
 
 interface AppSettings {
   alwaysShowHints: boolean;
+  showOutcome: boolean;
   suitOrder: Suit[];
+}
+
+interface OutcomePrediction {
+  winner: number | null;
+  simulatedTurns: number;
 }
 
 function wait(ms: number): Promise<void> {
@@ -76,6 +83,7 @@ function normalizeSettings(value: (Partial<AppSettings> & { aiSuggestion?: boole
 
   return {
     alwaysShowHints: Boolean(value?.alwaysShowHints ?? value?.aiSuggestion),
+    showOutcome: Boolean(value?.showOutcome),
     suitOrder:
       uniqueSuitOrder.length === DEFAULT_SUIT_ORDER.length
         ? uniqueSuitOrder
@@ -398,6 +406,35 @@ function createHumanGame(): GameState {
   return createGame(`human-${Date.now()}`);
 }
 
+async function simulateLikelyOutcome(
+  startState: GameState,
+  model: PolicyValueModel,
+  shouldCancel: () => boolean
+): Promise<OutcomePrediction | null> {
+  let projected = cloneGameState(startState);
+  let simulatedTurns = 0;
+
+  while (!isTerminal(projected) && simulatedTurns < 80) {
+    await wait(0);
+    if (shouldCancel()) {
+      return null;
+    }
+
+    const player = projected.currentPlayer;
+    const result = searchMoveForObserver(projected, player, model, {
+      simulations: 36,
+      determinizations: 1,
+      revealOpponents: true,
+      rng: createRng(`${projected.id}:outcome:${projected.history.length}:${player}:${simulatedTurns}`)
+    });
+    projected = applyMove(projected, result.move);
+    simulatedTurns += 1;
+  }
+
+  const winner = placements(projected)[0] ?? null;
+  return { winner, simulatedTurns };
+}
+
 function previousHumanTurnIndex(timeline: GameState[], currentIndex: number): number {
   for (let index = currentIndex - 1; index >= 0; index -= 1) {
     const state = timeline[index];
@@ -408,15 +445,29 @@ function previousHumanTurnIndex(timeline: GameState[], currentIndex: number): nu
   return Math.max(0, currentIndex - 1);
 }
 
+function OutcomeBadge({ prediction }: { prediction: OutcomePrediction | null }) {
+  if (!prediction || prediction.winner === null) {
+    return null;
+  }
+
+  return (
+    <div className="outcome-badge">
+      Likely winner: <strong>{PLAYER_LABELS[prediction.winner]}</strong>
+    </div>
+  );
+}
+
 function PlayAgainstAi({
   alwaysShowHints,
   model,
   onOpenSettings,
+  showOutcome,
   suitOrder
 }: {
   alwaysShowHints: boolean;
   model: PolicyValueModel;
   onOpenSettings: () => void;
+  showOutcome: boolean;
   suitOrder: Suit[];
 }) {
   const [timeline, setTimeline] = useState<GameState[]>(() => [createHumanGame()]);
@@ -424,6 +475,7 @@ function PlayAgainstAi({
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [singleHint, setSingleHint] = useState(false);
   const [suggestion, setSuggestion] = useState<SearchResult | null>(null);
+  const [outcomePrediction, setOutcomePrediction] = useState<OutcomePrediction | null>(null);
   const [busy, setBusy] = useState(false);
   const timelineRef = useRef(timeline);
   const currentIndexRef = useRef(currentIndex);
@@ -566,6 +618,36 @@ function PlayAgainstAi({
     };
   }, [busy, game, hintsActive, model]);
 
+  useEffect(() => {
+    if (!showOutcome || busy) {
+      setOutcomePrediction(null);
+      return;
+    }
+
+    let cancelled = false;
+    setOutcomePrediction(null);
+
+    if (isTerminal(game)) {
+      setOutcomePrediction({ winner: placements(game)[0] ?? null, simulatedTurns: 0 });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const timeout = window.setTimeout(() => {
+      void simulateLikelyOutcome(game, model, () => cancelled).then((prediction) => {
+        if (!cancelled && prediction) {
+          setOutcomePrediction(prediction);
+        }
+      });
+    }, 120);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [busy, game, model, showOutcome]);
+
   const applyHumanMove = (move: Move) => {
     if (game.currentPlayer !== HUMAN_PLAYER || busy) {
       return;
@@ -612,6 +694,7 @@ function PlayAgainstAi({
           <div className="turn-badge">
             {turnText(game, busy)}
           </div>
+          {showOutcome ? <OutcomeBadge prediction={outcomePrediction} /> : null}
           <div className="active-combo">
             {game.activeCombo ? (
               <HandView hand={sortCardsForDisplay(game.activeCombo.cards, suitOrder)} reveal />
@@ -712,6 +795,14 @@ function SettingsModal({
             />
             <span>Always show hints</span>
           </label>
+          <label className="toggle-row">
+            <input
+              checked={settings.showOutcome}
+              onChange={(event) => onChange({ ...settings, showOutcome: event.currentTarget.checked })}
+              type="checkbox"
+            />
+            <span>Show outcome</span>
+          </label>
         </div>
 
         <div className="settings-section">
@@ -791,6 +882,7 @@ export function App() {
         alwaysShowHints={settings.alwaysShowHints}
         model={model}
         onOpenSettings={() => setSettingsOpen(true)}
+        showOutcome={settings.showOutcome}
         suitOrder={settings.suitOrder}
       />
       {settingsOpen ? (

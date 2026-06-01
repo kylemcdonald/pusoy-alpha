@@ -222,7 +222,8 @@ button {
 }
 
 .turn-badge,
-.lead-marker {
+.lead-marker,
+.outcome-badge {
   min-height: 30px;
   display: inline-flex;
   align-items: center;
@@ -233,6 +234,16 @@ button {
   border: 1px solid rgba(255, 255, 255, 0.38);
   border-radius: 999px;
   font-weight: 800;
+}
+
+.outcome-badge {
+  color: #f8fafc;
+  background: rgba(20, 56, 42, 0.84);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.outcome-badge strong {
+  margin-left: 5px;
 }
 
 .active-combo {
