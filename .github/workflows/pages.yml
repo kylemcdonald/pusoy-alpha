@@ -23,6 +23,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo install wasm-bindgen-cli --version 0.2.121 --locked
       - run: npm ci
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
