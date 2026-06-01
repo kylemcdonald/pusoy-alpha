@@ -435,27 +435,6 @@ button {
   font-size: 0.9rem;
 }
 
-.scoreboard {
-  display: grid;
-  gap: 8px;
-}
-
-.score-row {
-  display: grid;
-  grid-template-columns: 20px 34px 1fr;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  padding: 0 10px;
-  background: #fbfbf7;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-}
-
-.score-row svg {
-  color: var(--accent-dark);
-}
-
 .timeline {
   list-style: none;
   display: grid;

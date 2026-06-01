@@ -6,7 +6,6 @@ import {
   RefreshCw,
   RotateCcw,
   Settings,
-  Trophy,
   Undo2,
   User,
   X
@@ -395,21 +394,6 @@ function Timeline({
   );
 }
 
-function Scoreboard({ state }: { state: GameState }) {
-  const order = placements(state);
-  return (
-    <div className="scoreboard">
-      {order.map((player, index) => (
-        <div className="score-row" key={player}>
-          <Trophy size={15} />
-          <span>#{index + 1}</span>
-          <strong>{PLAYER_LABELS[player]}</strong>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function turnText(state: GameState, busy: boolean): string {
   if (isTerminal(state)) {
     return placements(state)[0] === HUMAN_PLAYER ? "You win" : "You lose";
@@ -764,7 +748,6 @@ function PlayAgainstAi({
             <Settings size={18} />
           </button>
         </div>
-        <Scoreboard state={game} />
         <Timeline
           busy={busy}
           currentIndex={currentIndex}
