@@ -350,15 +350,19 @@ function Timeline({
         >
           <span>{PLAYER_LABELS[entry.player]}</span>
           <strong>{formatMoveDisplay(entry.move, suitOrder)}</strong>
-          <button
-            className="icon-button timeline-jump"
-            disabled={busy || stateIndex === currentIndex}
-            onClick={() => onJump(stateIndex)}
-            title={stateIndex === currentIndex ? "Current state" : `Reset to turn ${entry.turn}`}
-            type="button"
-          >
-            <CornerUpLeft size={15} />
-          </button>
+          {entry.player !== HUMAN_PLAYER ? (
+            <button
+              className="icon-button timeline-jump"
+              disabled={busy || stateIndex === currentIndex}
+              onClick={() => onJump(stateIndex)}
+              title={stateIndex === currentIndex ? "Current state" : `Reset to turn ${entry.turn}`}
+              type="button"
+            >
+              <CornerUpLeft size={15} />
+            </button>
+          ) : (
+            <span aria-hidden="true" className="timeline-jump-spacer" />
+          )}
         </li>
       ))}
     </ol>
