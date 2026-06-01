@@ -275,12 +275,14 @@ function MoveTray({
   canShowHint,
   canAutoplay,
   canGoBack,
+  gameOver,
   onShowHint,
   onPlay,
   onPass,
   onAutoplay,
   onBack,
-  onClear
+  onClear,
+  onNewGame
 }: {
   selectedCards: Card[];
   canPlay: boolean;
@@ -291,13 +293,27 @@ function MoveTray({
   canShowHint: boolean;
   canAutoplay: boolean;
   canGoBack: boolean;
+  gameOver: boolean;
   onShowHint: () => void;
   onPlay: () => void;
   onPass: () => void;
   onAutoplay: () => void;
   onBack: () => void;
   onClear: () => void;
+  onNewGame: () => void;
 }) {
+  if (gameOver) {
+    return (
+      <div className="move-tray">
+        <div className="button-row">
+          <button className="command-button primary" onClick={onNewGame} type="button">
+            New Game
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="move-tray">
       <div className="button-row">
@@ -722,10 +738,12 @@ function PlayAgainstAi({
           canPass={canPass}
           canPlay={canPlay}
           canShowHint={canShowHint}
+          gameOver={isTerminal(game)}
           hintButton={hintButton}
           onAutoplay={autoplaySuggestion}
           onBack={backOneTurn}
           onClear={() => setSelected(new Set())}
+          onNewGame={reset}
           onPass={() => applyHumanMove(PASS_MOVE)}
           onPlay={() => selectedMove && selectedMove.type === "play" && applyHumanMove(selectedMove)}
           onShowHint={requestHint}
