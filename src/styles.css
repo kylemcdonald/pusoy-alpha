@@ -47,7 +47,9 @@ button {
   grid-template-columns: minmax(0, 1fr) 320px;
   gap: 0;
   height: 100vh;
+  height: 100dvh;
   min-height: 100vh;
+  min-height: 100dvh;
   overflow: hidden;
 }
 
@@ -510,14 +512,18 @@ button {
 @media (max-width: 980px) {
   .game-layout {
     grid-template-columns: 1fr;
-    height: auto;
-    overflow: visible;
+    grid-template-rows: minmax(0, 1fr) minmax(190px, 38vh);
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .side-rail {
-    max-height: min(62vh, 560px);
+    max-height: none;
     border-left: 0;
     border-top: 1px solid var(--border);
+    overflow-y: auto;
   }
 
   .opponent-grid {
