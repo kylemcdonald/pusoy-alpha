@@ -46,16 +46,20 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
   gap: 0;
+  height: 100vh;
   min-height: 100vh;
+  overflow: hidden;
 }
 
 .table-surface {
+  min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(170px, 1fr) auto auto;
   gap: clamp(12px, 2vw, 18px);
   padding: clamp(14px, 2.4vw, 26px);
   background: var(--felt);
   color: white;
+  overflow-y: auto;
 }
 
 .opponent-grid {
@@ -315,12 +319,16 @@ button {
 }
 
 .side-rail {
+  min-height: 0;
+  max-height: 100vh;
   display: grid;
   align-content: start;
   gap: 14px;
   padding: 16px;
   background: var(--panel);
   border-left: 1px solid var(--border);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .toggle-row {
@@ -489,9 +497,12 @@ button {
 @media (max-width: 980px) {
   .game-layout {
     grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
   }
 
   .side-rail {
+    max-height: min(62vh, 560px);
     border-left: 0;
     border-top: 1px solid var(--border);
   }
