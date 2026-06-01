@@ -4,7 +4,6 @@ import {
   Bot,
   CornerUpLeft,
   RefreshCw,
-  RotateCcw,
   Settings,
   Undo2,
   User,
@@ -265,7 +264,6 @@ function PlayerStrip({
 }
 
 function MoveTray({
-  selectedCards,
   canPlay,
   canPass,
   busy,
@@ -274,16 +272,17 @@ function MoveTray({
   canShowHint,
   canAutoplay,
   canGoBack,
+  canShowOutcomeOnce,
   gameOver,
+  outcomeOnceActive,
   onShowHint,
+  onShowOutcomeOnce,
   onPlay,
   onPass,
   onAutoplay,
   onBack,
-  onClear,
   onNewGame
 }: {
-  selectedCards: Card[];
   canPlay: boolean;
   canPass: boolean;
   busy: boolean;
@@ -292,13 +291,15 @@ function MoveTray({
   canShowHint: boolean;
   canAutoplay: boolean;
   canGoBack: boolean;
+  canShowOutcomeOnce: boolean;
   gameOver: boolean;
+  outcomeOnceActive: boolean;
   onShowHint: () => void;
+  onShowOutcomeOnce: () => void;
   onPlay: () => void;
   onPass: () => void;
   onAutoplay: () => void;
   onBack: () => void;
-  onClear: () => void;
   onNewGame: () => void;
 }) {
   if (gameOver) {
@@ -319,9 +320,17 @@ function MoveTray({
         <button className="icon-button" disabled={busy || !canGoBack} onClick={onBack} title="Back one turn" type="button">
           <Undo2 size={18} />
         </button>
-        <button className="icon-button" disabled={busy || selectedCards.length === 0} onClick={onClear} title="Clear" type="button">
-          <RotateCcw size={18} />
-        </button>
+        {canShowOutcomeOnce ? (
+          <button
+            className="icon-button"
+            disabled={busy || outcomeOnceActive}
+            onClick={onShowOutcomeOnce}
+            title="Show predicted outcome this turn"
+            type="button"
+          >
+            ✨
+          </button>
+        ) : null}
         <button
           className={`command-button ${passSuggested ? "suggested-pass" : ""}`}
           disabled={busy || !canPass}
@@ -408,6 +417,10 @@ function createHumanGame(): GameState {
   return createGame(`human-${Date.now()}`);
 }
 
+function outcomeTurnKey(state: GameState): string {
+  return `${state.id}:${state.history.length}:${state.currentPlayer}`;
+}
+
 function searchUiMove(state: GameState, player: number, model: PolicyValueModel): SearchResult {
   const seed =
     player === HUMAN_PLAYER
@@ -483,6 +496,7 @@ function PlayAgainstAi({
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [singleHint, setSingleHint] = useState(false);
+  const [outcomeOnceKey, setOutcomeOnceKey] = useState<string | null>(null);
   const [suggestion, setSuggestion] = useState<SearchResult | null>(null);
   const [outcomePrediction, setOutcomePrediction] = useState<OutcomePrediction | null>(null);
   const [busy, setBusy] = useState(false);
@@ -491,6 +505,9 @@ function PlayAgainstAi({
   const busyRef = useRef(false);
   const game = (timeline[currentIndex] ?? timeline[timeline.length - 1])!;
   const hintsActive = alwaysShowHints || singleHint;
+  const currentOutcomeTurnKey = outcomeTurnKey(game);
+  const outcomeOnceActive = outcomeOnceKey === currentOutcomeTurnKey;
+  const outcomeVisible = showOutcome || outcomeOnceActive;
   const canGoBack = currentIndex > 0;
 
   useEffect(() => {
@@ -520,6 +537,7 @@ function PlayAgainstAi({
     }
     setSelected(new Set());
     setSingleHint(false);
+    setOutcomeOnceKey(null);
     setSuggestion(null);
     currentIndexRef.current = index;
     setCurrentIndex(index);
@@ -553,6 +571,7 @@ function PlayAgainstAi({
   const canAutoplay =
     hintsActive && Boolean(suggestion) && game.currentPlayer === HUMAN_PLAYER && !busy && !isTerminal(game);
   const hintButton = alwaysShowHints || singleHint ? "autoplay" : "show-hint";
+  const canShowOutcomeOnce = !showOutcome && !isTerminal(game);
 
   const toggleSelected = (card: Card) => {
     if (game.currentPlayer !== HUMAN_PLAYER || busy) {
@@ -620,7 +639,13 @@ function PlayAgainstAi({
   }, [busy, game, hintsActive, model]);
 
   useEffect(() => {
-    if (!showOutcome) {
+    if (outcomeOnceKey !== null && outcomeOnceKey !== currentOutcomeTurnKey) {
+      setOutcomeOnceKey(null);
+    }
+  }, [currentOutcomeTurnKey, outcomeOnceKey]);
+
+  useEffect(() => {
+    if (!outcomeVisible) {
       setOutcomePrediction(null);
       return;
     }
@@ -650,7 +675,7 @@ function PlayAgainstAi({
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [busy, game, model, showOutcome]);
+  }, [busy, game, model, outcomeVisible]);
 
   const applyHumanMove = (move: Move) => {
     if (game.currentPlayer !== HUMAN_PLAYER || busy) {
@@ -659,6 +684,7 @@ function PlayAgainstAi({
     const next = applyMove(game, move);
     setSelected(new Set());
     setSingleHint(false);
+    setOutcomeOnceKey(null);
     appendGameState(next);
   };
 
@@ -666,8 +692,17 @@ function PlayAgainstAi({
     const next = createHumanGame();
     setSelected(new Set());
     setSingleHint(false);
+    setOutcomeOnceKey(null);
     setSuggestion(null);
     setTimelinePosition([next], 0);
+  };
+
+  const showOutcomeOnce = () => {
+    if (!canShowOutcomeOnce || busy) {
+      return;
+    }
+    setOutcomePrediction(null);
+    setOutcomeOnceKey(currentOutcomeTurnKey);
   };
 
   const requestHint = () => {
@@ -698,7 +733,7 @@ function PlayAgainstAi({
           <div className="turn-badge">
             {turnText(game, busy)}
           </div>
-          <OutcomeBadge enabled={showOutcome && !isTerminal(game)} prediction={outcomePrediction} />
+          <OutcomeBadge enabled={outcomeVisible && !isTerminal(game)} prediction={outcomePrediction} />
           <div className="active-combo">
             {game.activeCombo ? (
               <HandView hand={sortCardsForDisplay(game.activeCombo.cards, suitOrder)} reveal />
@@ -725,17 +760,18 @@ function PlayAgainstAi({
           canPass={canPass}
           canPlay={canPlay}
           canShowHint={canShowHint}
+          canShowOutcomeOnce={canShowOutcomeOnce}
           gameOver={isTerminal(game)}
           hintButton={hintButton}
+          outcomeOnceActive={outcomeOnceActive}
           onAutoplay={autoplaySuggestion}
           onBack={backOneTurn}
-          onClear={() => setSelected(new Set())}
           onNewGame={reset}
           onPass={() => applyHumanMove(PASS_MOVE)}
           onPlay={() => selectedMove && selectedMove.type === "play" && applyHumanMove(selectedMove)}
           onShowHint={requestHint}
+          onShowOutcomeOnce={showOutcomeOnce}
           passSuggested={passSuggested}
-          selectedCards={selectedCards}
         />
       </div>
 
