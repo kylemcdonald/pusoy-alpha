@@ -472,11 +472,11 @@ function previousHumanTurnIndex(timeline: GameState[], currentIndex: number): nu
 }
 
 function OutcomeBadge({ enabled, prediction }: { enabled: boolean; prediction: OutcomePrediction | null }) {
-  const visible = enabled && prediction !== null && prediction.winner !== null;
-  const winner = visible ? PLAYER_LABELS[prediction.winner!] : PLAYER_LABELS[HUMAN_PLAYER];
+  const hasWinner = prediction !== null && prediction.winner !== null;
+  const winner = hasWinner ? PLAYER_LABELS[prediction.winner!] : "Calculating";
 
   return (
-    <div aria-hidden={!visible} className={`outcome-badge ${visible ? "" : "empty"}`}>
+    <div aria-hidden={!enabled} className={`outcome-badge ${enabled ? "" : "empty"}`}>
       Likely winner: <strong>{winner}</strong>
     </div>
   );
@@ -636,13 +636,16 @@ function PlayAgainstAi({
   }, [busy, game, hintsActive, model]);
 
   useEffect(() => {
-    if (!showOutcome || busy) {
+    if (!showOutcome) {
       setOutcomePrediction(null);
       return;
     }
 
+    if (busy) {
+      return;
+    }
+
     let cancelled = false;
-    setOutcomePrediction(null);
 
     if (isTerminal(game)) {
       setOutcomePrediction({ winner: placements(game)[0] ?? null, simulatedTurns: 0 });
