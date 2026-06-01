@@ -714,7 +714,7 @@ function PlayAgainstAi({
           <div className="turn-badge">
             {turnText(game, busy)}
           </div>
-          <OutcomeBadge enabled={showOutcome} prediction={outcomePrediction} />
+          <OutcomeBadge enabled={showOutcome && !isTerminal(game)} prediction={outcomePrediction} />
           <div className="active-combo">
             {game.activeCombo ? (
               <HandView hand={sortCardsForDisplay(game.activeCombo.cards, suitOrder)} reveal />
