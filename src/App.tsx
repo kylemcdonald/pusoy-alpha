@@ -5,6 +5,7 @@ import {
   CornerUpLeft,
   RefreshCw,
   Settings,
+  Sparkles,
   Undo2,
   User,
   X
@@ -322,13 +323,14 @@ function MoveTray({
         </button>
         {canShowOutcomeOnce ? (
           <button
-            className="icon-button"
+            aria-label="Show predicted outcome this turn"
+            className="icon-button monochrome-icon"
             disabled={busy || outcomeOnceActive}
             onClick={onShowOutcomeOnce}
             title="Show predicted outcome this turn"
             type="button"
           >
-            ✨
+            <Sparkles size={18} strokeWidth={2.5} />
           </button>
         ) : null}
         <button

@@ -333,6 +333,10 @@ button {
   border: 1px solid var(--border);
 }
 
+.icon-button.monochrome-icon {
+  color: #000;
+}
+
 .side-rail {
   min-height: 0;
   max-height: 100vh;
