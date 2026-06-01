@@ -455,14 +455,13 @@ function previousHumanTurnIndex(timeline: GameState[], currentIndex: number): nu
   return Math.max(0, currentIndex - 1);
 }
 
-function OutcomeBadge({ prediction }: { prediction: OutcomePrediction | null }) {
-  if (!prediction || prediction.winner === null) {
-    return null;
-  }
+function OutcomeBadge({ enabled, prediction }: { enabled: boolean; prediction: OutcomePrediction | null }) {
+  const visible = enabled && prediction !== null && prediction.winner !== null;
+  const winner = visible ? PLAYER_LABELS[prediction.winner!] : PLAYER_LABELS[HUMAN_PLAYER];
 
   return (
-    <div className="outcome-badge">
-      Likely winner: <strong>{PLAYER_LABELS[prediction.winner]}</strong>
+    <div aria-hidden={!visible} className={`outcome-badge ${visible ? "" : "empty"}`}>
+      Likely winner: <strong>{winner}</strong>
     </div>
   );
 }
@@ -696,7 +695,7 @@ function PlayAgainstAi({
           <div className="turn-badge">
             {turnText(game, busy)}
           </div>
-          {showOutcome ? <OutcomeBadge prediction={outcomePrediction} /> : null}
+          <OutcomeBadge enabled={showOutcome} prediction={outcomePrediction} />
           <div className="active-combo">
             {game.activeCombo ? (
               <HandView hand={sortCardsForDisplay(game.activeCombo.cards, suitOrder)} reveal />

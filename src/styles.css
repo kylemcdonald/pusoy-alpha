@@ -220,7 +220,9 @@ button {
 .center-table {
   min-height: 180px;
   display: grid;
-  place-items: center;
+  grid-template-rows: 34px 34px 88px;
+  justify-items: center;
+  align-items: center;
   align-content: center;
   gap: 10px;
 }
@@ -241,9 +243,14 @@ button {
 }
 
 .outcome-badge {
+  min-width: 164px;
   color: #f8fafc;
   background: rgba(20, 56, 42, 0.84);
   border-color: rgba(255, 255, 255, 0.28);
+}
+
+.outcome-badge.empty {
+  visibility: hidden;
 }
 
 .outcome-badge strong {
@@ -251,9 +258,15 @@ button {
 }
 
 .active-combo {
-  min-height: 78px;
+  width: min(100%, 330px);
+  height: 88px;
   display: grid;
   place-items: center;
+}
+
+.active-combo .hand {
+  justify-content: center;
+  min-height: 78px;
 }
 
 .move-tray {
