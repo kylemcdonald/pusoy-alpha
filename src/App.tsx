@@ -10,7 +10,7 @@ import {
   User,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import {
   Card,
   GameState,
@@ -32,6 +32,8 @@ import {
   HandcraftedModel,
   NeuralPolicyValueModel,
   PolicyValueModel,
+  WasmSearchEngine,
+  createWasmSearchEngine,
   searchMoveForObserver,
   type NeuralModelFile,
   type SearchResult
@@ -50,18 +52,42 @@ const SUIT_SYMBOLS: Record<Suit, string> = {
   D: "♦️"
 };
 const SETTINGS_KEY = "pusoy-alpha-settings";
-const UI_SEARCH_SIMULATIONS = 90;
-const UI_SEARCH_DETERMINIZATIONS = 3;
+type ThinkingLevel = "short" | "medium" | "long";
+const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
+const THINKING_TIME_BUDGETS_MS: Record<ThinkingLevel, number> = {
+  short: 100,
+  medium: 500,
+  long: 1000
+};
+const DECISION_SIMULATIONS_PER_DETERMINATION = 12;
+const OUTCOME_ESTIMATE_TIME_BUDGET_MS = 1000;
+const OUTCOME_TURN_TIME_BUDGET_MS = 30;
+const OUTCOME_SIMULATIONS_PER_DETERMINATION = 2;
 
 interface AppSettings {
   alwaysShowHints: boolean;
+  debug: boolean;
   showOutcome: boolean;
+  thinkingLevel: ThinkingLevel;
   suitOrder: Suit[];
+}
+
+interface SearchBudget {
+  timeLimitMs: number;
+  simulationsPerDetermination: number;
 }
 
 interface OutcomePrediction {
   winner: number | null;
   simulatedTurns: number;
+  determinizations: number;
+  simulations: number;
+}
+
+interface DebugStats {
+  label: string;
+  determinizations: number;
+  simulations: number;
 }
 
 function wait(ms: number): Promise<void> {
@@ -72,11 +98,48 @@ function isSuit(value: string): value is Suit {
   return DEFAULT_SUIT_ORDER.includes(value as Suit);
 }
 
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return value === "short" || value === "medium" || value === "long";
+}
+
+function migrateThinkingLevel(value: { thinkingLevel?: unknown; searchSimulations?: unknown } | null | undefined): ThinkingLevel {
+  if (isThinkingLevel(value?.thinkingLevel)) {
+    return value.thinkingLevel;
+  }
+
+  const simulations =
+    typeof value?.searchSimulations === "number"
+      ? value.searchSimulations
+      : typeof value?.searchSimulations === "string"
+        ? Number(value.searchSimulations)
+        : Number.NaN;
+  if (Number.isFinite(simulations)) {
+    if (simulations <= 100) {
+      return "short";
+    }
+    if (simulations >= 400) {
+      return "long";
+    }
+  }
+
+  return DEFAULT_THINKING_LEVEL;
+}
+
 function sameSuitOrder(left: Suit[], right: Suit[]): boolean {
   return left.length === right.length && left.every((suit, index) => suit === right[index]);
 }
 
-function normalizeSettings(value: (Partial<AppSettings> & { aiSuggestion?: boolean }) | null | undefined): AppSettings {
+function normalizeSettings(
+  value:
+    | (Partial<AppSettings> & {
+        aiSuggestion?: boolean;
+        searchDeterminizations?: unknown;
+        searchSimulations?: unknown;
+        thinkingLevel?: unknown;
+      })
+    | null
+    | undefined
+): AppSettings {
   const suitOrder = Array.isArray(value?.suitOrder)
     ? value.suitOrder.filter((suit): suit is Suit => typeof suit === "string" && isSuit(suit))
     : [];
@@ -84,7 +147,9 @@ function normalizeSettings(value: (Partial<AppSettings> & { aiSuggestion?: boole
 
   return {
     alwaysShowHints: Boolean(value?.alwaysShowHints ?? value?.aiSuggestion),
+    debug: Boolean(value?.debug),
     showOutcome: Boolean(value?.showOutcome),
+    thinkingLevel: migrateThinkingLevel(value),
     suitOrder:
       uniqueSuitOrder.length === DEFAULT_SUIT_ORDER.length
         ? uniqueSuitOrder
@@ -184,6 +249,7 @@ function HandView({
   selectedIds,
   suggestedIds,
   onToggle,
+  onDoubleTap,
   reveal = true,
   compact = false
 }: {
@@ -191,13 +257,36 @@ function HandView({
   selectedIds?: Set<string>;
   suggestedIds?: Set<string>;
   onToggle?: (card: Card) => void;
+  onDoubleTap?: () => void;
   reveal?: boolean;
   compact?: boolean;
 }) {
+  const lastTapRef = useRef(0);
+  const handClassName = `hand ${onDoubleTap ? "revealable" : ""}`;
+  const handEvents = onDoubleTap
+    ? {
+        onDoubleClick: () => onDoubleTap(),
+        onPointerUp: (event: PointerEvent<HTMLDivElement>) => {
+          if (event.pointerType === "mouse") {
+            return;
+          }
+
+          const now = window.performance.now();
+          if (now - lastTapRef.current <= 360) {
+            lastTapRef.current = 0;
+            event.preventDefault();
+            onDoubleTap();
+            return;
+          }
+
+          lastTapRef.current = now;
+        }
+      }
+    : {};
   const displayedHand = sortCardsForDisplay(hand, DEFAULT_SUIT_ORDER);
   if (!reveal) {
     return (
-      <div className="hand">
+      <div className={handClassName} {...handEvents}>
         {displayedHand.map((card) => (
           <div className={`card-back ${compact ? "compact" : ""}`} key={cardId(card)} />
         ))}
@@ -206,7 +295,7 @@ function HandView({
   }
 
   return (
-    <div className="hand">
+    <div className={handClassName} {...handEvents}>
       {hand.map((card) => (
         <CardButton
           card={card}
@@ -228,7 +317,8 @@ function PlayerStrip({
   selectedIds,
   suggestedIds,
   suitOrder,
-  onToggle
+  onToggle,
+  onHandDoubleTap
 }: {
   player: number;
   state: GameState;
@@ -237,6 +327,7 @@ function PlayerStrip({
   suggestedIds?: Set<string>;
   suitOrder: Suit[];
   onToggle?: (card: Card) => void;
+  onHandDoubleTap?: () => void;
 }) {
   const finished = state.finished.indexOf(player);
   const displayedHand = sortCardsForDisplay(state.hands[player], suitOrder);
@@ -255,6 +346,7 @@ function PlayerStrip({
       <HandView
         compact={player !== HUMAN_PLAYER}
         hand={displayedHand}
+        onDoubleTap={onHandDoubleTap}
         onToggle={onToggle}
         reveal={reveal}
         selectedIds={selectedIds}
@@ -307,6 +399,9 @@ function MoveTray({
     return (
       <div className="move-tray">
         <div className="button-row">
+          <button className="icon-button" disabled={busy || !canGoBack} onClick={onBack} title="Back one turn" type="button">
+            <Undo2 size={18} />
+          </button>
           <button className="command-button primary" onClick={onNewGame} type="button">
             New Game
           </button>
@@ -345,12 +440,22 @@ function MoveTray({
           Play
         </button>
         {hintButton === "show-hint" ? (
-          <button className="command-button" disabled={busy || !canShowHint} onClick={onShowHint} type="button">
+          <button
+            className="command-button hint-action"
+            disabled={busy || !canShowHint}
+            onClick={onShowHint}
+            type="button"
+          >
             Hint
           </button>
         ) : null}
         {hintButton === "autoplay" ? (
-          <button className="command-button autoplay" disabled={busy || !canAutoplay} onClick={onAutoplay} type="button">
+          <button
+            className="command-button autoplay hint-action"
+            disabled={busy || !canAutoplay}
+            onClick={onAutoplay}
+            type="button"
+          >
             Autoplay
           </button>
         ) : null}
@@ -423,15 +528,25 @@ function outcomeTurnKey(state: GameState): string {
   return `${state.id}:${state.history.length}:${state.currentPlayer}`;
 }
 
-function searchUiMove(state: GameState, player: number, model: PolicyValueModel): SearchResult {
+function searchUiMove(
+  state: GameState,
+  player: number,
+  model: PolicyValueModel,
+  searchBudget: SearchBudget,
+  wasmSearch: WasmSearchEngine | null
+): SearchResult {
   const seed =
     player === HUMAN_PLAYER
       ? `${state.id}:hint:${state.history.length}`
       : `${state.id}:${state.history.length}:${player}`;
+  const wasmResult = wasmSearch?.search(state, player, seed, searchBudget);
+  if (wasmResult) {
+    return wasmResult;
+  }
 
   return searchMoveForObserver(state, player, model, {
-    simulations: UI_SEARCH_SIMULATIONS,
-    determinizations: UI_SEARCH_DETERMINIZATIONS,
+    simulationsPerDetermination: searchBudget.simulationsPerDetermination,
+    timeLimitMs: searchBudget.timeLimitMs,
     rng: createRng(seed)
   });
 }
@@ -439,10 +554,14 @@ function searchUiMove(state: GameState, player: number, model: PolicyValueModel)
 async function simulateLikelyOutcome(
   startState: GameState,
   model: PolicyValueModel,
+  wasmSearch: WasmSearchEngine | null,
   shouldCancel: () => boolean
 ): Promise<OutcomePrediction | null> {
   let projected = cloneGameState(startState);
   let simulatedTurns = 0;
+  let determinizations = 0;
+  let simulations = 0;
+  const deadline = window.performance.now() + OUTCOME_ESTIMATE_TIME_BUDGET_MS;
 
   while (!isTerminal(projected) && simulatedTurns < 80) {
     await wait(0);
@@ -450,14 +569,30 @@ async function simulateLikelyOutcome(
       return null;
     }
 
+    const remainingMs = deadline - window.performance.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+
     const player = projected.currentPlayer;
-    const result = searchUiMove(projected, player, model);
+    const result = searchUiMove(
+      projected,
+      player,
+      model,
+      {
+        simulationsPerDetermination: OUTCOME_SIMULATIONS_PER_DETERMINATION,
+        timeLimitMs: Math.min(OUTCOME_TURN_TIME_BUDGET_MS, remainingMs)
+      },
+      wasmSearch
+    );
+    determinizations += result.determinizations;
+    simulations += result.simulations;
     projected = applyMove(projected, result.move);
     simulatedTurns += 1;
   }
 
   const winner = placements(projected)[0] ?? null;
-  return { winner, simulatedTurns };
+  return { winner, simulatedTurns, determinizations, simulations };
 }
 
 function previousHumanTurnIndex(timeline: GameState[], currentIndex: number): number {
@@ -481,18 +616,38 @@ function OutcomeBadge({ enabled, prediction }: { enabled: boolean; prediction: O
   );
 }
 
+function DebugStatus({ enabled, stats }: { enabled: boolean; stats: DebugStats | null }) {
+  if (!enabled) {
+    return <div aria-hidden="true" className="debug-status empty" />;
+  }
+
+  return (
+    <div className="debug-status">
+      {stats
+        ? `${stats.label}: ${stats.determinizations} determinizations, ${stats.simulations} simulations`
+        : "No thinking stats yet"}
+    </div>
+  );
+}
+
 function PlayAgainstAi({
   alwaysShowHints,
+  debug,
   model,
   onOpenSettings,
   showOutcome,
-  suitOrder
+  thinkingLevel,
+  suitOrder,
+  wasmSearch
 }: {
   alwaysShowHints: boolean;
+  debug: boolean;
   model: PolicyValueModel;
   onOpenSettings: () => void;
   showOutcome: boolean;
+  thinkingLevel: ThinkingLevel;
   suitOrder: Suit[];
+  wasmSearch: WasmSearchEngine | null;
 }) {
   const [timeline, setTimeline] = useState<GameState[]>(() => [createHumanGame()]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -501,6 +656,8 @@ function PlayAgainstAi({
   const [outcomeOnceKey, setOutcomeOnceKey] = useState<string | null>(null);
   const [suggestion, setSuggestion] = useState<SearchResult | null>(null);
   const [outcomePrediction, setOutcomePrediction] = useState<OutcomePrediction | null>(null);
+  const [debugStats, setDebugStats] = useState<DebugStats | null>(null);
+  const [opponentCardsRevealed, setOpponentCardsRevealed] = useState(false);
   const [busy, setBusy] = useState(false);
   const timelineRef = useRef(timeline);
   const currentIndexRef = useRef(currentIndex);
@@ -511,6 +668,14 @@ function PlayAgainstAi({
   const outcomeOnceActive = outcomeOnceKey === currentOutcomeTurnKey;
   const outcomeVisible = showOutcome || outcomeOnceActive;
   const canGoBack = currentIndex > 0;
+  const opponentCardsVisible = opponentCardsRevealed || isTerminal(game);
+  const decisionSearchBudget = useMemo(
+    () => ({
+      simulationsPerDetermination: DECISION_SIMULATIONS_PER_DETERMINATION,
+      timeLimitMs: THINKING_TIME_BUDGETS_MS[thinkingLevel]
+    }),
+    [thinkingLevel]
+  );
 
   useEffect(() => {
     timelineRef.current = timeline;
@@ -603,7 +768,12 @@ function PlayAgainstAi({
     while (!isTerminal(next) && next.currentPlayer !== HUMAN_PLAYER && guard < 80) {
       await wait(180);
       const player = next.currentPlayer;
-      const result = searchUiMove(next, player, model);
+      const result = searchUiMove(next, player, model, decisionSearchBudget, wasmSearch);
+      setDebugStats({
+        label: "AI",
+        determinizations: result.determinizations,
+        simulations: result.simulations
+      });
       next = applyMove(next, result.move);
       appendGameState(next);
       guard += 1;
@@ -617,7 +787,7 @@ function PlayAgainstAi({
     if (!isTerminal(game) && game.currentPlayer !== HUMAN_PLAYER) {
       void runAiTurns(game);
     }
-  }, [game, model]);
+  }, [game, model, decisionSearchBudget, wasmSearch]);
 
   useEffect(() => {
     if (!hintsActive || busy || isTerminal(game) || game.currentPlayer !== HUMAN_PLAYER) {
@@ -628,9 +798,14 @@ function PlayAgainstAi({
     let cancelled = false;
     setSuggestion(null);
     const timeout = window.setTimeout(() => {
-      const result = searchUiMove(game, HUMAN_PLAYER, model);
+      const result = searchUiMove(game, HUMAN_PLAYER, model, decisionSearchBudget, wasmSearch);
       if (!cancelled) {
         setSuggestion(result);
+        setDebugStats({
+          label: "Suggestion",
+          determinizations: result.determinizations,
+          simulations: result.simulations
+        });
       }
     }, 20);
 
@@ -638,7 +813,7 @@ function PlayAgainstAi({
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [busy, game, hintsActive, model]);
+  }, [busy, game, hintsActive, model, decisionSearchBudget, wasmSearch]);
 
   useEffect(() => {
     if (outcomeOnceKey !== null && outcomeOnceKey !== currentOutcomeTurnKey) {
@@ -659,16 +834,26 @@ function PlayAgainstAi({
     let cancelled = false;
 
     if (isTerminal(game)) {
-      setOutcomePrediction({ winner: placements(game)[0] ?? null, simulatedTurns: 0 });
+      setOutcomePrediction({
+        winner: placements(game)[0] ?? null,
+        simulatedTurns: 0,
+        determinizations: 0,
+        simulations: 0
+      });
       return () => {
         cancelled = true;
       };
     }
 
     const timeout = window.setTimeout(() => {
-      void simulateLikelyOutcome(game, model, () => cancelled).then((prediction) => {
+      void simulateLikelyOutcome(game, model, wasmSearch, () => cancelled).then((prediction) => {
         if (!cancelled && prediction) {
           setOutcomePrediction(prediction);
+          setDebugStats({
+            label: "Outcome",
+            determinizations: prediction.determinizations,
+            simulations: prediction.simulations
+          });
         }
       });
     }, 120);
@@ -677,7 +862,7 @@ function PlayAgainstAi({
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [busy, game, model, outcomeVisible]);
+  }, [busy, game, model, outcomeVisible, wasmSearch]);
 
   const applyHumanMove = (move: Move) => {
     if (game.currentPlayer !== HUMAN_PLAYER || busy) {
@@ -696,6 +881,8 @@ function PlayAgainstAi({
     setSingleHint(false);
     setOutcomeOnceKey(null);
     setSuggestion(null);
+    setDebugStats(null);
+    setOpponentCardsRevealed(false);
     setTimelinePosition([next], 0);
   };
 
@@ -727,7 +914,14 @@ function PlayAgainstAi({
       <div className="table-surface">
         <div className="opponent-grid">
           {[1].map((player) => (
-            <PlayerStrip key={player} player={player} reveal={false} state={game} suitOrder={suitOrder} />
+            <PlayerStrip
+              key={player}
+              onHandDoubleTap={() => setOpponentCardsRevealed(true)}
+              player={player}
+              reveal={opponentCardsVisible}
+              state={game}
+              suitOrder={suitOrder}
+            />
           ))}
         </div>
 
@@ -736,6 +930,7 @@ function PlayAgainstAi({
             {turnText(game, busy)}
           </div>
           <OutcomeBadge enabled={outcomeVisible && !isTerminal(game)} prediction={outcomePrediction} />
+          <DebugStatus enabled={debug} stats={debugStats} />
           <div className="active-combo">
             {game.activeCombo ? (
               <HandView hand={sortCardsForDisplay(game.activeCombo.cards, suitOrder)} reveal />
@@ -846,6 +1041,31 @@ function SettingsModal({
             />
             <span>Show outcome</span>
           </label>
+          <label className="toggle-row">
+            <input
+              checked={settings.debug}
+              onChange={(event) => onChange({ ...settings, debug: event.currentTarget.checked })}
+              type="checkbox"
+            />
+            <span>Debug</span>
+          </label>
+          <label className="setting-row">
+            <span>Thinking</span>
+            <select
+              onChange={(event) => {
+                const nextLevel = event.currentTarget.value;
+                onChange({
+                  ...settings,
+                  thinkingLevel: isThinkingLevel(nextLevel) ? nextLevel : DEFAULT_THINKING_LEVEL
+                });
+              }}
+              value={settings.thinkingLevel}
+            >
+              <option value="short">Short - 0.1s</option>
+              <option value="medium">Medium - 0.5s</option>
+              <option value="long">Long - 1s</option>
+            </select>
+          </label>
         </div>
 
         <div className="settings-section">
@@ -895,6 +1115,7 @@ export function App() {
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [model, setModel] = useState<PolicyValueModel>(() => new HandcraftedModel());
+  const [wasmSearch, setWasmSearch] = useState<WasmSearchEngine | null>(null);
 
   useEffect(() => {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
@@ -904,14 +1125,30 @@ export function App() {
     let cancelled = false;
     fetch(`${import.meta.env.BASE_URL}models/neural-policy.json`)
       .then((response) => (response.ok ? (response.json() as Promise<NeuralModelFile>) : null))
-      .then((neural) => {
+      .then(async (neural) => {
         if (!cancelled) {
           setModel(neural ? new NeuralPolicyValueModel(neural) : new HandcraftedModel());
+          setWasmSearch(null);
+        }
+        if (!neural) {
+          return;
+        }
+
+        try {
+          const engine = await createWasmSearchEngine(neural);
+          if (!cancelled) {
+            setWasmSearch(engine);
+          }
+        } catch {
+          if (!cancelled) {
+            setWasmSearch(null);
+          }
         }
       })
       .catch(() => {
         if (!cancelled) {
           setModel(new HandcraftedModel());
+          setWasmSearch(null);
         }
       });
     return () => {
@@ -923,10 +1160,13 @@ export function App() {
     <div className="app-shell">
       <PlayAgainstAi
         alwaysShowHints={settings.alwaysShowHints}
+        debug={settings.debug}
         model={model}
         onOpenSettings={() => setSettingsOpen(true)}
         showOutcome={settings.showOutcome}
+        thinkingLevel={settings.thinkingLevel}
         suitOrder={settings.suitOrder}
+        wasmSearch={wasmSearch}
       />
       {settingsOpen ? (
         <SettingsModal

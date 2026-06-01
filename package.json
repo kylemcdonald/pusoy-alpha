@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc -b && vite build",
+    "build": "npm run build:wasm && tsc -b && vite build",
+    "build:wasm": "cargo build --manifest-path wasm/Cargo.toml --release --target wasm32-unknown-unknown && wasm-bindgen --target web --out-dir src/wasm/pkg wasm/target/wasm32-unknown-unknown/release/pusoy_alpha_wasm.wasm",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
     "train:alphazero": "bash scripts/run-gpu-alpha-train.sh",

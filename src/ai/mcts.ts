@@ -6,6 +6,7 @@ import { HandcraftedModel, PolicyValueModel } from "./model";
 
 export interface SearchOptions {
   simulations?: number;
+  timeLimitMs?: number;
   maxDepth?: number;
   exploration?: number;
   rng?: RandomSource;
@@ -15,12 +16,14 @@ export interface SearchOptions {
 export interface ObserverSearchOptions extends SearchOptions {
   determinizations?: number;
   revealOpponents?: boolean;
+  simulationsPerDetermination?: number;
 }
 
 export interface SearchResult {
   move: Move;
   visits: Record<string, number>;
   value: number;
+  determinizations: number;
   simulations: number;
   legalMoveCount: number;
 }
@@ -36,6 +39,10 @@ interface SearchNode {
 
 function nodeValue(node: SearchNode): number {
   return node.visits === 0 ? 0 : node.valueSum / node.visits;
+}
+
+function nowMs(): number {
+  return globalThis.performance?.now() ?? Date.now();
 }
 
 function makeNode(state: GameState, move: Move | null, prior = 1): SearchNode {
@@ -128,19 +135,23 @@ export function searchMove(
       move: moves[0],
       visits: { [moveKey(moves[0])]: 1 },
       value: model.evaluate(state, options.rootPlayer ?? state.currentPlayer, moves).value,
+      determinizations: 0,
       simulations: 0,
       legalMoveCount: 1
     };
   }
 
   const simulations = options.simulations ?? 96;
+  const deadline = options.timeLimitMs === undefined ? null : nowMs() + Math.max(1, options.timeLimitMs);
   const maxDepth = options.maxDepth ?? 80;
   const exploration = options.exploration ?? 1.35;
   const rootPlayer = options.rootPlayer ?? state.currentPlayer;
   const root = makeNode(state, null);
+  let simulationsRun = 0;
 
-  for (let simulation = 0; simulation < simulations; simulation += 1) {
+  while (deadline === null ? simulationsRun < simulations : simulationsRun === 0 || nowMs() < deadline) {
     visit(root, model, rootPlayer, 0, maxDepth, exploration);
+    simulationsRun += 1;
   }
 
   const children = root.children ?? [];
@@ -155,7 +166,8 @@ export function searchMove(
       move: moves[0],
       visits: { [moveKey(moves[0])]: 1 },
       value: 0,
-      simulations,
+      determinizations: 0,
+      simulations: simulationsRun,
       legalMoveCount: moves.length
     };
   }
@@ -164,7 +176,8 @@ export function searchMove(
     move: best.move,
     visits: Object.fromEntries(children.map((child) => [moveKey(child.move!), child.visits])),
     value: nodeValue(root),
-    simulations,
+    determinizations: 0,
+    simulations: simulationsRun,
     legalMoveCount: moves.length
   };
 }
@@ -185,6 +198,48 @@ export function searchMoveForObserver(
   }
 
   const rng = options.rng ?? createRng(`${state.id}:${state.history.length}:${observer}`);
+  if (options.timeLimitMs !== undefined) {
+    const deadline = nowMs() + Math.max(1, options.timeLimitMs);
+    const simulationsPerDetermination = Math.max(2, Math.floor(options.simulationsPerDetermination ?? 12));
+    const visits = new Map<string, number>();
+    let valueSum = 0;
+    let determinizationsRun = 0;
+    let simulationsRun = 0;
+
+    while (determinizationsRun === 0 || nowMs() < deadline) {
+      const determinized = determinizeForPlayer(state, observer, rng);
+      const result = searchMove(determinized, model, {
+        ...options,
+        simulations: simulationsPerDetermination,
+        timeLimitMs: undefined,
+        rootPlayer: observer,
+        rng
+      });
+
+      determinizationsRun += 1;
+      simulationsRun += result.simulations;
+      valueSum += result.value;
+      for (const [key, count] of Object.entries(result.visits)) {
+        visits.set(key, (visits.get(key) ?? 0) + count);
+      }
+    }
+
+    const bestMove = rootMoves.reduce((winner, move) => {
+      const winnerVisits = visits.get(moveKey(winner)) ?? 0;
+      const moveVisits = visits.get(moveKey(move)) ?? 0;
+      return moveVisits > winnerVisits ? move : winner;
+    }, rootMoves[0]);
+
+    return {
+      move: bestMove,
+      visits: Object.fromEntries(rootMoves.map((move) => [moveKey(move), visits.get(moveKey(move)) ?? 0])),
+      value: valueSum / determinizationsRun,
+      determinizations: determinizationsRun,
+      simulations: simulationsRun,
+      legalMoveCount: rootMoves.length
+    };
+  }
+
   const determinizations = Math.max(1, options.determinizations ?? 3);
   const simulationsPerDetermination = Math.max(1, Math.floor((options.simulations ?? 96) / determinizations));
   const visits = new Map<string, number>();
@@ -215,6 +270,7 @@ export function searchMoveForObserver(
     move: bestMove,
     visits: Object.fromEntries(rootMoves.map((move) => [moveKey(move), visits.get(moveKey(move)) ?? 0])),
     value: valueSum / determinizations,
+    determinizations,
     simulations: simulationsPerDetermination * determinizations,
     legalMoveCount: rootMoves.length
   };

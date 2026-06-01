@@ -11,6 +11,7 @@ logs/
 tsconfig.tsbuildinfo
 scripts/__pycache__/
 *.pyc
+wasm/target/
 
 model-archive/
 research-runs/
