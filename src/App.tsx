@@ -51,6 +51,8 @@ const SUIT_SYMBOLS: Record<Suit, string> = {
   D: "♦️"
 };
 const SETTINGS_KEY = "pusoy-alpha-settings";
+const UI_SEARCH_SIMULATIONS = 90;
+const UI_SEARCH_DETERMINIZATIONS = 3;
 
 interface AppSettings {
   alwaysShowHints: boolean;
@@ -406,6 +408,19 @@ function createHumanGame(): GameState {
   return createGame(`human-${Date.now()}`);
 }
 
+function searchUiMove(state: GameState, player: number, model: PolicyValueModel): SearchResult {
+  const seed =
+    player === HUMAN_PLAYER
+      ? `${state.id}:hint:${state.history.length}`
+      : `${state.id}:${state.history.length}:${player}`;
+
+  return searchMoveForObserver(state, player, model, {
+    simulations: UI_SEARCH_SIMULATIONS,
+    determinizations: UI_SEARCH_DETERMINIZATIONS,
+    rng: createRng(seed)
+  });
+}
+
 async function simulateLikelyOutcome(
   startState: GameState,
   model: PolicyValueModel,
@@ -421,12 +436,7 @@ async function simulateLikelyOutcome(
     }
 
     const player = projected.currentPlayer;
-    const result = searchMoveForObserver(projected, player, model, {
-      simulations: 36,
-      determinizations: 1,
-      revealOpponents: true,
-      rng: createRng(`${projected.id}:outcome:${projected.history.length}:${player}:${simulatedTurns}`)
-    });
+    const result = searchUiMove(projected, player, model);
     projected = applyMove(projected, result.move);
     simulatedTurns += 1;
   }
@@ -573,11 +583,7 @@ function PlayAgainstAi({
     while (!isTerminal(next) && next.currentPlayer !== HUMAN_PLAYER && guard < 80) {
       await wait(180);
       const player = next.currentPlayer;
-      const result = searchMoveForObserver(next, player, model, {
-        simulations: 90,
-        determinizations: 3,
-        rng: createRng(`${next.id}:${next.history.length}:${player}`)
-      });
+      const result = searchUiMove(next, player, model);
       next = applyMove(next, result.move);
       appendGameState(next);
       guard += 1;
@@ -602,11 +608,7 @@ function PlayAgainstAi({
     let cancelled = false;
     setSuggestion(null);
     const timeout = window.setTimeout(() => {
-      const result = searchMoveForObserver(game, HUMAN_PLAYER, model, {
-        simulations: 72,
-        determinizations: 2,
-        rng: createRng(`${game.id}:hint:${game.history.length}`)
-      });
+      const result = searchUiMove(game, HUMAN_PLAYER, model);
       if (!cancelled) {
         setSuggestion(result);
       }
