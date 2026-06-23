@@ -24,6 +24,7 @@ const STRAIGHT_PATTERNS: [[u8; 5]; 11] = [
     [12, 0, 1, 2, 3],
     [8, 9, 10, 11, 12],
 ];
+const NON_WRAP_STRAIGHT_PATTERN_COUNT: usize = 8;
 
 thread_local! {
     static MODEL: RefCell<Option<Model>> = const { RefCell::new(None) };
@@ -54,6 +55,11 @@ struct Model {
 }
 
 #[derive(Clone)]
+struct Rules {
+    allow_wraparound_straights: bool,
+}
+
+#[derive(Clone)]
 struct Combo {
     kind: u8,
     cards: Vec<u8>,
@@ -70,6 +76,7 @@ struct MoveR {
 #[derive(Clone)]
 struct Game {
     hands: [Vec<u8>; 2],
+    rules: Rules,
     current_player: i8,
     active_combo: Option<Combo>,
     last_player: i8,
@@ -138,7 +145,7 @@ fn combo_kind_order(kind: u8) -> f32 {
     }
 }
 
-fn detect_straight(cards: &[u8]) -> Option<(usize, u8)> {
+fn detect_straight(cards: &[u8], rules: &Rules) -> Option<(usize, u8)> {
     let mut ranks: Vec<u8> = cards.iter().map(|card| rank(*card)).collect();
     ranks.sort_unstable();
     ranks.dedup();
@@ -147,6 +154,9 @@ fn detect_straight(cards: &[u8]) -> Option<(usize, u8)> {
     }
 
     for (order, pattern) in STRAIGHT_PATTERNS.iter().enumerate() {
+        if !rules.allow_wraparound_straights && order >= NON_WRAP_STRAIGHT_PATTERN_COUNT {
+            continue;
+        }
         let mut pattern_ranks = pattern.to_vec();
         pattern_ranks.sort_unstable();
         if ranks == pattern_ranks {
@@ -164,7 +174,7 @@ fn detect_straight(cards: &[u8]) -> Option<(usize, u8)> {
     None
 }
 
-fn classify_combo(input_cards: &[u8]) -> Option<Combo> {
+fn classify_combo(input_cards: &[u8], rules: &Rules) -> Option<Combo> {
     let mut cards = input_cards.to_vec();
     sort_cards(&mut cards);
     let size = cards.len();
@@ -208,7 +218,7 @@ fn classify_combo(input_cards: &[u8]) -> Option<Combo> {
         return None;
     }
 
-    let straight = detect_straight(&cards);
+    let straight = detect_straight(&cards, rules);
     let is_flush = cards.iter().all(|card| card % 4 == cards[0] % 4);
     let mut group_sizes: Vec<u8> = counts.iter().copied().filter(|count| *count > 0).collect();
     group_sizes.sort_by(|left, right| right.cmp(left));
@@ -306,13 +316,13 @@ fn combo_beats(candidate: &Combo, target: &Option<Combo>) -> bool {
     }
 }
 
-fn enumerate_combos(hand: &[u8]) -> Vec<Combo> {
+fn enumerate_combos(hand: &[u8], rules: &Rules) -> Vec<Combo> {
     let mut cards = hand.to_vec();
     sort_cards(&mut cards);
     let mut combos = Vec::new();
 
     for card in &cards {
-        if let Some(combo) = classify_combo(&[*card]) {
+        if let Some(combo) = classify_combo(&[*card], rules) {
             combos.push(combo);
         }
     }
@@ -325,7 +335,7 @@ fn enumerate_combos(hand: &[u8]) -> Vec<Combo> {
     for group in &by_rank {
         for left in 0..group.len() {
             for right in left + 1..group.len() {
-                if let Some(combo) = classify_combo(&[group[left], group[right]]) {
+                if let Some(combo) = classify_combo(&[group[left], group[right]], rules) {
                     combos.push(combo);
                 }
             }
@@ -333,7 +343,7 @@ fn enumerate_combos(hand: &[u8]) -> Vec<Combo> {
         for a in 0..group.len() {
             for b in a + 1..group.len() {
                 for c in b + 1..group.len() {
-                    if let Some(combo) = classify_combo(&[group[a], group[b], group[c]]) {
+                    if let Some(combo) = classify_combo(&[group[a], group[b], group[c]], rules) {
                         combos.push(combo);
                     }
                 }
@@ -346,7 +356,7 @@ fn enumerate_combos(hand: &[u8]) -> Vec<Combo> {
             for c in b + 1..cards.len() {
                 for d in c + 1..cards.len() {
                     for e in d + 1..cards.len() {
-                        if let Some(combo) = classify_combo(&[cards[a], cards[b], cards[c], cards[d], cards[e]]) {
+                        if let Some(combo) = classify_combo(&[cards[a], cards[b], cards[c], cards[d], cards[e]], rules) {
                             combos.push(combo);
                         }
                     }
@@ -426,7 +436,7 @@ fn legal_moves(game: &Game) -> Vec<MoveR> {
 
     let player = game.current_player as usize;
     let is_first_move = game.history_len == 0;
-    let mut combos = enumerate_combos(&game.hands[player]);
+    let mut combos = enumerate_combos(&game.hands[player], &game.rules);
     if is_first_move {
         combos.retain(|combo| combo.cards.contains(&LOWEST_CARD));
     }
@@ -1005,11 +1015,15 @@ fn read_cards(input: &[i32], cursor: &mut usize) -> Vec<u8> {
 }
 
 fn parse_game(input: &[i32]) -> Option<Game> {
-    if input.len() < 11 {
+    if input.len() < 12 {
         return None;
     }
     let mut cursor = 0;
     let current_player = input[cursor] as i8;
+    cursor += 1;
+    let rules = Rules {
+        allow_wraparound_straights: input[cursor] != 0,
+    };
     cursor += 1;
     let active_len = input[cursor].max(0) as usize;
     cursor += 1;
@@ -1023,7 +1037,7 @@ fn parse_game(input: &[i32]) -> Option<Game> {
     let active_combo = if active_cards.is_empty() {
         None
     } else {
-        classify_combo(&active_cards)
+        classify_combo(&active_cards, &rules)
     };
     let last_player = input[cursor] as i8;
     cursor += 1;
@@ -1040,6 +1054,7 @@ fn parse_game(input: &[i32]) -> Option<Game> {
 
     Some(Game {
         hands: [hand0, hand1],
+        rules,
         current_player,
         active_combo,
         last_player,
@@ -1155,7 +1170,7 @@ mod tests {
     fn parses_initial_state_with_legal_lowest_card_move() {
         let hand0 = [3, 0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44];
         let hand1 = [1, 2, 5, 6, 9, 10, 13, 14, 17, 18, 21, 22, 25];
-        let mut state = vec![0, 0, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0, 0, 0];
+        let mut state = vec![0, 0, 0, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0, 0, 0];
         state.push(hand0.len() as i32);
         state.extend(hand0.iter().map(|card| *card as i32));
         state.push(hand1.len() as i32);

@@ -38,6 +38,30 @@ describe("Pusoy Dos combination rules", () => {
     expect(beats(straightFlush, fourKind)).toBe(true);
   });
 
+  it("disallows wraparound straights by default", () => {
+    const wraparoundStraights = [
+      cards(["AD", "2C", "3H", "4S", "5D"]),
+      cards(["2D", "3C", "4H", "5S", "6D"]),
+      cards(["JD", "QC", "KH", "AS", "2D"])
+    ];
+
+    for (const straight of wraparoundStraights) {
+      expect(classifyCombo(straight)).toBeNull();
+      expect(enumerateCombos(straight).some((combo) => combo.kind === "straight")).toBe(false);
+    }
+  });
+
+  it("allows wraparound straights when enabled", () => {
+    const rules = { allowWraparoundStraights: true };
+    const aceLow = classifyCombo(cards(["AD", "2C", "3H", "4S", "5D"]), rules)!;
+    const sixHigh = classifyCombo(cards(["2D", "3C", "4H", "5S", "6D"]), rules)!;
+    const twoHigh = classifyCombo(cards(["JD", "QC", "KH", "AS", "2D"]), rules)!;
+
+    expect(aceLow.kind).toBe("straight");
+    expect(sixHigh.kind).toBe("straight");
+    expect(twoHigh.kind).toBe("straight");
+  });
+
   it("enumerates all basic singles for a hand", () => {
     const hand = cards(["3C", "3S", "4C", "5D", "6H"]);
     const combos = enumerateCombos(hand);
@@ -47,6 +71,11 @@ describe("Pusoy Dos combination rules", () => {
 });
 
 describe("Pusoy Dos game flow", () => {
+  it("records the selected wraparound rule on new games", () => {
+    expect(createGame("default-rules").rules?.allowWraparoundStraights).toBe(false);
+    expect(createGame("wrap-rules", { allowWraparoundStraights: true }).rules?.allowWraparoundStraights).toBe(true);
+  });
+
   it("requires the first move to include 3D", () => {
     const game = createGame("first-move-test");
     const firstPlayer = game.currentPlayer;

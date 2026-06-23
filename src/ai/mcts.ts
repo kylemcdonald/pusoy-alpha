@@ -109,7 +109,7 @@ function visit(
     const value =
       actor === rootPlayer ? policyEvaluation.value : model.evaluate(node.state, rootPlayer, moves).value;
     node.children = moves.map((move) => {
-      return makeNode(applyLegalMove(node.state, move), move, policyEvaluation.priors.get(moveKey(move)) ?? 0.001);
+      return makeNode(applyLegalMove(node.state, move), move, policyEvaluation.priors.get(moveKey(move, node.state.rules)) ?? 0.001);
     });
     node.valueSum += value;
     return value;
@@ -133,7 +133,7 @@ export function searchMove(
   if (moves.length === 1) {
     return {
       move: moves[0],
-      visits: { [moveKey(moves[0])]: 1 },
+      visits: { [moveKey(moves[0], state.rules)]: 1 },
       value: model.evaluate(state, options.rootPlayer ?? state.currentPlayer, moves).value,
       determinizations: 0,
       simulations: 0,
@@ -164,7 +164,7 @@ export function searchMove(
   if (!best || !best.move) {
     return {
       move: moves[0],
-      visits: { [moveKey(moves[0])]: 1 },
+      visits: { [moveKey(moves[0], state.rules)]: 1 },
       value: 0,
       determinizations: 0,
       simulations: simulationsRun,
@@ -174,7 +174,7 @@ export function searchMove(
 
   return {
     move: best.move,
-    visits: Object.fromEntries(children.map((child) => [moveKey(child.move!), child.visits])),
+    visits: Object.fromEntries(children.map((child) => [moveKey(child.move!, state.rules), child.visits])),
     value: nodeValue(root),
     determinizations: 0,
     simulations: simulationsRun,
@@ -225,14 +225,14 @@ export function searchMoveForObserver(
     }
 
     const bestMove = rootMoves.reduce((winner, move) => {
-      const winnerVisits = visits.get(moveKey(winner)) ?? 0;
-      const moveVisits = visits.get(moveKey(move)) ?? 0;
+      const winnerVisits = visits.get(moveKey(winner, state.rules)) ?? 0;
+      const moveVisits = visits.get(moveKey(move, state.rules)) ?? 0;
       return moveVisits > winnerVisits ? move : winner;
     }, rootMoves[0]);
 
     return {
       move: bestMove,
-      visits: Object.fromEntries(rootMoves.map((move) => [moveKey(move), visits.get(moveKey(move)) ?? 0])),
+      visits: Object.fromEntries(rootMoves.map((move) => [moveKey(move, state.rules), visits.get(moveKey(move, state.rules)) ?? 0])),
       value: valueSum / determinizationsRun,
       determinizations: determinizationsRun,
       simulations: simulationsRun,
@@ -261,14 +261,14 @@ export function searchMoveForObserver(
   }
 
   const bestMove = rootMoves.reduce((winner, move) => {
-    const winnerVisits = visits.get(moveKey(winner)) ?? 0;
-    const moveVisits = visits.get(moveKey(move)) ?? 0;
+    const winnerVisits = visits.get(moveKey(winner, state.rules)) ?? 0;
+    const moveVisits = visits.get(moveKey(move, state.rules)) ?? 0;
     return moveVisits > winnerVisits ? move : winner;
   }, rootMoves[0]);
 
   return {
     move: bestMove,
-    visits: Object.fromEntries(rootMoves.map((move) => [moveKey(move), visits.get(moveKey(move)) ?? 0])),
+    visits: Object.fromEntries(rootMoves.map((move) => [moveKey(move, state.rules), visits.get(moveKey(move, state.rules)) ?? 0])),
     value: valueSum / determinizations,
     determinizations,
     simulations: simulationsPerDetermination * determinizations,

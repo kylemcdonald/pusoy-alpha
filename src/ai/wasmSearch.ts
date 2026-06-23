@@ -1,4 +1,15 @@
-import { GameState, PASS_MOVE, RANKS, SUITS, legalMoves, moveKey, playMove, rankValue, suitIndex } from "../core";
+import {
+  GameState,
+  PASS_MOVE,
+  RANKS,
+  SUITS,
+  legalMoves,
+  moveKey,
+  normalizeComboRules,
+  playMove,
+  rankValue,
+  suitIndex
+} from "../core";
 import { hashSeed } from "../core/random";
 import type { NeuralModelFile } from "./neuralModel";
 import type { SearchResult } from "./mcts";
@@ -28,14 +39,14 @@ export class WasmSearchEngine {
       moveLength === 0
         ? PASS_MOVE
         : playMove(Array.from({ length: moveLength }, (_, index) => cardFromWasmId(raw[index + 1])));
-    const legal = legalMoves(state).find((candidate) => moveKey(candidate) === moveKey(move));
+    const legal = legalMoves(state).find((candidate) => moveKey(candidate, state.rules) === moveKey(move, state.rules));
     if (!legal) {
       return null;
     }
 
     return {
       move: legal,
-      visits: { [moveKey(legal)]: raw[7] },
+      visits: { [moveKey(legal, state.rules)]: raw[7] },
       value: 0,
       determinizations: Math.max(0, raw[6]),
       simulations: Math.max(0, raw[7]),
@@ -103,8 +114,10 @@ function pushLayer(values: number[], layer: { weight: number[][]; bias: number[]
 }
 
 function packState(state: GameState): Int32Array {
+  const rules = normalizeComboRules(state.rules);
   const values: number[] = [
     state.currentPlayer,
+    rules.allowWraparoundStraights ? 1 : 0,
     state.activeCombo?.cards.length ?? 0,
     ...fixedCards(state.activeCombo?.cards ?? [], 5),
     state.lastPlayer ?? -1,

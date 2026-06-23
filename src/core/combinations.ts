@@ -33,6 +33,14 @@ export interface Combo {
 
 export type Move = { type: "pass" } | { type: "play"; cards: Card[] };
 
+export interface ComboRules {
+  allowWraparoundStraights: boolean;
+}
+
+export const DEFAULT_COMBO_RULES: ComboRules = {
+  allowWraparoundStraights: false
+};
+
 const FIVE_CARD_KIND_ORDER: Record<ComboKind, number> = {
   single: -1,
   pair: -1,
@@ -57,10 +65,17 @@ const STRAIGHT_PATTERNS: Rank[][] = [
   ["2", "3", "4", "5", "6"],
   ["J", "Q", "K", "A", "2"]
 ];
+const NON_WRAP_STRAIGHT_PATTERN_COUNT = 8;
 
 interface StraightInfo {
   order: number;
   topSuit: number;
+}
+
+export function normalizeComboRules(rules: Partial<ComboRules> | null | undefined): ComboRules {
+  return {
+    allowWraparoundStraights: Boolean(rules?.allowWraparoundStraights)
+  };
 }
 
 function rankCounts(cards: Card[]): Map<Rank, Card[]> {
@@ -73,14 +88,17 @@ function rankCounts(cards: Card[]): Map<Rank, Card[]> {
   return groups;
 }
 
-function detectStraight(cards: Card[]): StraightInfo | null {
+function detectStraight(cards: Card[], rules: ComboRules): StraightInfo | null {
   const uniqueRanks = new Set(cards.map((card) => card.rank));
   if (uniqueRanks.size !== 5) {
     return null;
   }
 
   const signature = [...uniqueRanks].sort((a, b) => rankValue(a) - rankValue(b)).join("-");
-  const order = STRAIGHT_PATTERNS.findIndex((pattern) => {
+  const order = STRAIGHT_PATTERNS.findIndex((pattern, patternIndex) => {
+    if (!rules.allowWraparoundStraights && patternIndex >= NON_WRAP_STRAIGHT_PATTERN_COUNT) {
+      return false;
+    }
     return [...pattern].sort((a, b) => rankValue(a) - rankValue(b)).join("-") === signature;
   });
 
@@ -103,7 +121,8 @@ function comboLabel(kind: ComboKind, cards: Card[]): string {
   return `${kind.replace("-", " ")}: ${cardText}`;
 }
 
-export function classifyCombo(inputCards: Card[]): Combo | null {
+export function classifyCombo(inputCards: Card[], rawRules?: Partial<ComboRules> | null): Combo | null {
+  const rules = normalizeComboRules(rawRules);
   const cards = sortCards(inputCards);
   const size = cards.length;
   const groups = rankCounts(cards);
@@ -142,7 +161,7 @@ export function classifyCombo(inputCards: Card[]): Combo | null {
     return null;
   }
 
-  const straight = detectStraight(cards);
+  const straight = detectStraight(cards, rules);
   const isFlush = cards.every((card) => card.suit === cards[0].suit);
   const groupSizes = [...groups.values()]
     .map((group) => group.length)
@@ -282,8 +301,13 @@ function rememberCombos(key: string, combos: Combo[]): Combo[] {
   return combos;
 }
 
-export function enumerateCombos(hand: Card[]): Combo[] {
-  const key = handKey(hand);
+function comboRulesKey(rules: ComboRules): string {
+  return rules.allowWraparoundStraights ? "wrap" : "no-wrap";
+}
+
+export function enumerateCombos(hand: Card[], rawRules?: Partial<ComboRules> | null): Combo[] {
+  const rules = normalizeComboRules(rawRules);
+  const key = `${comboRulesKey(rules)}:${handKey(hand)}`;
   const cached = comboCache.get(key);
   if (cached) {
     return cached;
@@ -293,7 +317,7 @@ export function enumerateCombos(hand: Card[]): Combo[] {
   const combos: Combo[] = [];
 
   for (const card of cards) {
-    const combo = classifyCombo([card]);
+    const combo = classifyCombo([card], rules);
     if (combo) {
       combos.push(combo);
     }
@@ -302,13 +326,13 @@ export function enumerateCombos(hand: Card[]): Combo[] {
   const groups = rankCounts(cards);
   for (const group of groups.values()) {
     for (const pair of chooseN(group, 2)) {
-      const combo = classifyCombo(pair);
+      const combo = classifyCombo(pair, rules);
       if (combo) {
         combos.push(combo);
       }
     }
     for (const triple of chooseN(group, 3)) {
-      const combo = classifyCombo(triple);
+      const combo = classifyCombo(triple, rules);
       if (combo) {
         combos.push(combo);
       }
@@ -316,7 +340,7 @@ export function enumerateCombos(hand: Card[]): Combo[] {
   }
 
   for (const fiveCards of chooseN(cards, 5)) {
-    const combo = classifyCombo(fiveCards);
+    const combo = classifyCombo(fiveCards, rules);
     if (combo) {
       combos.push(combo);
     }
@@ -353,19 +377,19 @@ export function comboKey(combo: Combo): string {
   return sortCards(combo.cards).map(cardId).join("-");
 }
 
-export function moveKey(move: Move): string {
+export function moveKey(move: Move, rules?: Partial<ComboRules> | null): string {
   if (move.type === "pass") {
     return "PASS";
   }
-  const combo = classifyCombo(move.cards);
+  const combo = classifyCombo(move.cards, rules);
   return combo ? comboKey(combo) : sortCards(move.cards).map(cardId).join("-");
 }
 
-export function formatMove(move: Move): string {
+export function formatMove(move: Move, rules?: Partial<ComboRules> | null): string {
   if (move.type === "pass") {
     return "Pass";
   }
-  const combo = classifyCombo(move.cards);
+  const combo = classifyCombo(move.cards, rules);
   return combo ? combo.label : sortCards(move.cards).map(cardId).join(" ");
 }
 

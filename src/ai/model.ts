@@ -27,7 +27,7 @@ function moveFeatureScore(state: GameState, move: Move): number {
   }
 
   const actor = state.currentPlayer;
-  const combo = classifyCombo(move.cards);
+  const combo = classifyCombo(move.cards, state.rules);
   if (!combo) {
     return 0.01;
   }
@@ -96,7 +96,7 @@ export class HandcraftedModel implements PolicyValueModel {
   evaluate(state: GameState, perspectivePlayer: number, moves = legalMoves(state)): ModelEvaluation {
     const scores = new Map<string, number>();
     for (const move of moves) {
-      scores.set(moveKey(move), moveFeatureScore(state, move));
+      scores.set(moveKey(move, state.rules), moveFeatureScore(state, move));
     }
 
     return {

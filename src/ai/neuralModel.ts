@@ -1,5 +1,5 @@
 import { Card, cardId, rankValue, suitIndex } from "../core/cards";
-import { Move, classifyCombo, moveKey } from "../core/combinations";
+import { ComboRules, Move, classifyCombo, moveKey, normalizeComboRules } from "../core/combinations";
 import { GameState, applyLegalMove, isTerminal, legalMoves, rewardForPlayer } from "../core/game";
 import { HandcraftedModel, ModelEvaluation, PolicyValueModel } from "./model";
 
@@ -140,7 +140,7 @@ function stateFeatures(state: GameState, player: number, stateDim: number): numb
   ];
 }
 
-function moveFeatures(move: Move, comboKinds: Record<string, number>): number[] {
+function moveFeatures(move: Move, comboKinds: Record<string, number>, rules?: Partial<ComboRules> | null): number[] {
   const bits = Array.from({ length: 52 }, () => 0);
   let pass = 0;
   let size = 0;
@@ -149,7 +149,7 @@ function moveFeatures(move: Move, comboKinds: Record<string, number>): number[] 
   if (move.type === "pass") {
     pass = 1;
   } else {
-    const combo = classifyCombo(move.cards);
+    const combo = classifyCombo(move.cards, rules);
     for (const card of move.cards) {
       bits[cardIndex(card)] = 1;
     }
@@ -200,7 +200,7 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
     const stateHidden = relu(linear(stateInput, weights.state_fc));
     const valueHidden = relu(linear(stateHidden, weights.value_fc));
     const logits = moves.map((move) => {
-      const moveHidden = relu(linear(moveFeatures(move, this.file.architecture.comboKinds), weights.move_fc));
+      const moveHidden = relu(linear(moveFeatures(move, this.file.architecture.comboKinds, state.rules), weights.move_fc));
       const policyInput = [...stateHidden, ...moveHidden];
       const policyHidden = relu(linear(policyInput, weights.policy_fc));
       return linear(policyHidden, weights.policy_out)[0] ?? 0;
@@ -225,7 +225,7 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
         : null;
     const priors = new Map<string, number>();
     moves.forEach((move, index) => {
-      const key = moveKey(move);
+      const key = moveKey(move, state.rules);
       const neuralPrior = baseProbabilities[index] ?? 0;
       const handcraftedPrior = handcraftedEvaluation?.priors.get(key) ?? neuralPrior;
       priors.set(
@@ -236,7 +236,7 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
     if (this.opponentAwarePriorWeight > 0) {
       const awarePriors = opponentAwarePriors(state, moves);
       moves.forEach((move, index) => {
-        const key = moveKey(move);
+        const key = moveKey(move, state.rules);
         const prior = priors.get(key) ?? 0;
         priors.set(key, (1 - this.opponentAwarePriorWeight) * prior + this.opponentAwarePriorWeight * awarePriors[index]);
       });
@@ -291,7 +291,8 @@ export class NeuralPolicyValueModel implements PolicyValueModel {
       }
       const evaluation = this.handcrafted.evaluate(rollout, rollout.currentPlayer, moves);
       const move = moves.reduce((best, candidate) => {
-        return (evaluation.priors.get(moveKey(candidate)) ?? 0) > (evaluation.priors.get(moveKey(best)) ?? 0)
+        return (evaluation.priors.get(moveKey(candidate, rollout.rules)) ?? 0) >
+          (evaluation.priors.get(moveKey(best, rollout.rules)) ?? 0)
           ? candidate
           : best;
       }, moves[0]);
@@ -323,7 +324,7 @@ function opponentAwarePriors(state: GameState, moves: Move[]): number[] {
     if (move.type === "pass") {
       return 0.05;
     }
-    const combo = classifyCombo(move.cards);
+    const combo = classifyCombo(move.cards, state.rules);
     if (!combo) {
       return 0.01;
     }
@@ -356,6 +357,7 @@ function remainingCards(state: GameState): number {
 
 function endgameKey(state: GameState): string {
   const active = state.activeCombo?.cards.map(cardId).join("-") ?? "";
+  const rules = normalizeComboRules(state.rules);
   return [
     state.hands[0].map(cardId).join("-"),
     state.hands[1].map(cardId).join("-"),
@@ -364,7 +366,8 @@ function endgameKey(state: GameState): string {
     state.lastPlayer ?? "n",
     state.passesSincePlay,
     state.finished.join("-"),
-    state.history.length === 0 ? 0 : 1
+    state.history.length === 0 ? 0 : 1,
+    rules.allowWraparoundStraights ? 1 : 0
   ].join("|");
 }
 

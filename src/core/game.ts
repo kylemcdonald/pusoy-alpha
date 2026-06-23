@@ -10,6 +10,7 @@ import {
 } from "./cards";
 import {
   Combo,
+  ComboRules,
   Move,
   PASS_MOVE,
   beats,
@@ -18,6 +19,7 @@ import {
   enumerateCombos,
   formatMove,
   moveKey,
+  normalizeComboRules,
   playMove
 } from "./combinations";
 import { RandomSource, createRng, shuffle } from "./random";
@@ -43,9 +45,10 @@ export interface GameState {
   passesSincePlay: number;
   finished: number[];
   history: HistoryEntry[];
+  rules?: ComboRules;
 }
 
-export function createGame(seed: string | number = Date.now()): GameState {
+export function createGame(seed: string | number = Date.now(), rules?: Partial<ComboRules> | null): GameState {
   const rng = createRng(seed);
   const deck = shuffle(newDeck(), rng);
   const cardsInPlay = PLAYER_COUNT * 13;
@@ -67,7 +70,8 @@ export function createGame(seed: string | number = Date.now()): GameState {
     lastPlayer: null,
     passesSincePlay: 0,
     finished: [],
-    history: []
+    history: [],
+    rules: normalizeComboRules(rules)
   };
 }
 
@@ -77,6 +81,7 @@ export function cloneGameState(state: GameState): GameState {
     hands: state.hands.map((hand) => hand.map((card) => ({ ...card }))),
     activeCombo: state.activeCombo ? { ...state.activeCombo, cards: [...state.activeCombo.cards] } : null,
     finished: [...state.finished],
+    rules: normalizeComboRules(state.rules),
     history: state.history.map((entry) => ({
       ...entry,
       move: entry.move.type === "pass" ? PASS_MOVE : playMove(entry.move.cards),
@@ -135,7 +140,8 @@ export function legalMoves(state: GameState): Move[] {
 
   const player = state.currentPlayer;
   const isFirstMove = state.history.length === 0;
-  let combos = enumerateCombos(state.hands[player]);
+  const rules = normalizeComboRules(state.rules);
+  let combos = enumerateCombos(state.hands[player], rules);
 
   if (isFirstMove) {
     combos = combos.filter(containsLowestCard);
@@ -154,14 +160,16 @@ export function legalMoves(state: GameState): Move[] {
 }
 
 export function isLegalMove(state: GameState, move: Move): boolean {
-  return legalMoves(state).some((legalMove) => moveKey(legalMove) === moveKey(move));
+  const rules = normalizeComboRules(state.rules);
+  return legalMoves(state).some((legalMove) => moveKey(legalMove, rules) === moveKey(move, rules));
 }
 
 export function applyMove(state: GameState, move: Move): GameState {
+  const rules = normalizeComboRules(state.rules);
   const legal = legalMoves(state);
-  const normalized = legal.find((candidate) => moveKey(candidate) === moveKey(move));
+  const normalized = legal.find((candidate) => moveKey(candidate, rules) === moveKey(move, rules));
   if (!normalized) {
-    throw new Error(`Illegal move for player ${state.currentPlayer}: ${formatMove(move)}`);
+    throw new Error(`Illegal move for player ${state.currentPlayer}: ${formatMove(move, rules)}`);
   }
 
   return applyLegalMove(state, normalized);
@@ -190,7 +198,7 @@ export function applyLegalMove(state: GameState, normalized: Move): GameState {
       next.currentPlayer = nextActivePlayer(next, player);
     }
   } else {
-    combo = classifyCombo(normalized.cards);
+    combo = classifyCombo(normalized.cards, next.rules);
     if (!combo) {
       throw new Error(`Cannot apply invalid combo: ${normalized.cards.map(cardId).join(" ")}`);
     }
@@ -232,8 +240,9 @@ export function cardsPlayed(state: GameState): Card[] {
 }
 
 export function findMoveByCards(state: GameState, cards: Card[]): Move | null {
-  const key = moveKey(playMove(cards));
-  return legalMoves(state).find((move) => moveKey(move) === key) ?? null;
+  const rules = normalizeComboRules(state.rules);
+  const key = moveKey(playMove(cards), rules);
+  return legalMoves(state).find((move) => moveKey(move, rules) === key) ?? null;
 }
 
 export function hasLowestCardInFirstMove(state: GameState, cards: Card[]): boolean {

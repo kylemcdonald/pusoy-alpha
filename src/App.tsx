@@ -66,6 +66,7 @@ const OUTCOME_SIMULATIONS_PER_DETERMINATION = 2;
 
 interface AppSettings {
   alwaysShowHints: boolean;
+  allowWraparoundStraights: boolean;
   debug: boolean;
   showOutcome: boolean;
   thinkingLevel: ThinkingLevel;
@@ -147,6 +148,7 @@ function normalizeSettings(
 
   return {
     alwaysShowHints: Boolean(value?.alwaysShowHints ?? value?.aiSuggestion),
+    allowWraparoundStraights: Boolean(value?.allowWraparoundStraights),
     debug: Boolean(value?.debug),
     showOutcome: Boolean(value?.showOutcome),
     thinkingLevel: migrateThinkingLevel(value),
@@ -520,8 +522,8 @@ function turnText(state: GameState, busy: boolean): string {
   return state.currentPlayer === HUMAN_PLAYER ? "Your turn" : "AI's turn";
 }
 
-function createHumanGame(): GameState {
-  return createGame(`human-${Date.now()}`);
+function createHumanGame(allowWraparoundStraights: boolean): GameState {
+  return createGame(`human-${Date.now()}`, { allowWraparoundStraights });
 }
 
 function outcomeTurnKey(state: GameState): string {
@@ -632,6 +634,7 @@ function DebugStatus({ enabled, stats }: { enabled: boolean; stats: DebugStats |
 
 function PlayAgainstAi({
   alwaysShowHints,
+  allowWraparoundStraights,
   debug,
   model,
   onOpenSettings,
@@ -641,6 +644,7 @@ function PlayAgainstAi({
   wasmSearch
 }: {
   alwaysShowHints: boolean;
+  allowWraparoundStraights: boolean;
   debug: boolean;
   model: PolicyValueModel;
   onOpenSettings: () => void;
@@ -649,7 +653,7 @@ function PlayAgainstAi({
   suitOrder: Suit[];
   wasmSearch: WasmSearchEngine | null;
 }) {
-  const [timeline, setTimeline] = useState<GameState[]>(() => [createHumanGame()]);
+  const [timeline, setTimeline] = useState<GameState[]>(() => [createHumanGame(allowWraparoundStraights)]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [singleHint, setSingleHint] = useState(false);
@@ -876,7 +880,7 @@ function PlayAgainstAi({
   };
 
   const reset = () => {
-    const next = createHumanGame();
+    const next = createHumanGame(allowWraparoundStraights);
     setSelected(new Set());
     setSingleHint(false);
     setOutcomeOnceKey(null);
@@ -885,6 +889,12 @@ function PlayAgainstAi({
     setOpponentCardsRevealed(false);
     setTimelinePosition([next], 0);
   };
+
+  useEffect(() => {
+    if (game.rules?.allowWraparoundStraights !== allowWraparoundStraights) {
+      reset();
+    }
+  }, [allowWraparoundStraights, game.rules?.allowWraparoundStraights]);
 
   const showOutcomeOnce = () => {
     if (!canShowOutcomeOnce || busy) {
@@ -1043,6 +1053,14 @@ function SettingsModal({
           </label>
           <label className="toggle-row">
             <input
+              checked={settings.allowWraparoundStraights}
+              onChange={(event) => onChange({ ...settings, allowWraparoundStraights: event.currentTarget.checked })}
+              type="checkbox"
+            />
+            <span>Allow wraparound straights</span>
+          </label>
+          <label className="toggle-row">
+            <input
               checked={settings.debug}
               onChange={(event) => onChange({ ...settings, debug: event.currentTarget.checked })}
               type="checkbox"
@@ -1160,6 +1178,7 @@ export function App() {
     <div className="app-shell">
       <PlayAgainstAi
         alwaysShowHints={settings.alwaysShowHints}
+        allowWraparoundStraights={settings.allowWraparoundStraights}
         debug={settings.debug}
         model={model}
         onOpenSettings={() => setSettingsOpen(true)}
